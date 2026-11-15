@@ -461,12 +461,22 @@ class KonvektorApp(_Base):
         полный путь к файлу — берём папку из него: имя всё равно будет
         «поставщик дата.xlsx», как и просили.
         """
-        value = self.out_var.get().strip().strip('"')
+        raw = self.out_var.get().strip().strip('"').strip("'").strip()
+        if not raw:
+            return ""
+        # «%USERPROFILE%\Documents», «~\Documents», путь из проводника в кавычках
+        value = os.path.expandvars(os.path.expanduser(raw)).strip()
         if not value:
             return ""
-        if os.path.splitext(value)[1].lower() in (".xlsx", ".xls", ".xlsm", ".csv"):
+        if os.path.isfile(value):
+            # указали файл, а не папку — берём папку из него
             value = os.path.dirname(value)
-        return value
+        elif os.path.splitext(value)[1].lower() in (".xlsx", ".xls", ".xlsm", ".csv"):
+            value = os.path.dirname(value)
+        if not value:
+            return ""
+        # «D:\Отчёты\» -> «D:\Отчёты»; «.» -> текущая папка
+        return os.path.normpath(value)
 
     # ------------------------------------------------------------ конвертация
     def on_convert(self) -> None:
@@ -529,7 +539,11 @@ class KonvektorApp(_Base):
             )
             return
 
-        folder = self._pending_out or self.output_dir()
+        # ВАЖНО: путь читаем из поля заново — пользователь мог изменить его
+        # после «Конвертировать». Раньше здесь брался снимок, и файл уходил
+        # в старую папку.
+        folder = self.output_dir()
+        self._pending_out = folder
         options = ConvertOptions(
             mode=MODE_COMBINED,
             add_source_columns=False,
@@ -594,6 +608,17 @@ class KonvektorApp(_Base):
         self.hint_var.set(f"Сохранено: {folder} / {name}")
         self.open_file_btn.configure(state="normal")
         self.open_folder_btn.configure(state="normal")
+
+        planned = result.planned_output
+        if planned and os.path.abspath(planned) != os.path.abspath(written):
+            # записать по указанному пути не удалось (нет прав / диск отключён)
+            reason = next((n for n in result.notes if "не удалось записать" in n), "")
+            messagebox.showwarning(
+                APP_NAME,
+                f"По указанному пути записать не удалось:\n{planned}\n\n"
+                f"Файл сохранён в:\n{written}\n\n{reason}".strip(),
+            )
+            return
         messagebox.showinfo(APP_NAME, f"Файл сохранён:\n{written}")
 
     def _poll_queue(self) -> None:

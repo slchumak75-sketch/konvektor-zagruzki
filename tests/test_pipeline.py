@@ -401,3 +401,17 @@ def test_vat_rate_fraction_becomes_percent():
     )
     validate_items([item])
     assert item.vat_rate == 20.0
+
+
+def test_unavailable_folder_raises_clear_error(known_paths, tmp_path):
+    """Недоступная папка — понятная ошибка, а не «[Errno 2] No such file»."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    blocker = tmp_path / "файл_вместо_папки.txt"
+    blocker.write_text("не папка")
+    bogus = str(blocker / "внутри")
+    with pytest.raises(ValueError) as exc:
+        convert([str(path)], "", ConvertOptions(naming="auto", output_dir=bogus))
+    assert "недоступна для записи" in str(exc.value)
+    assert "Куда сохранить" in str(exc.value)

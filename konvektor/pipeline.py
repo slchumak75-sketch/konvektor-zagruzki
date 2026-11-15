@@ -393,7 +393,15 @@ def convert(
         return result
 
     # ---- запись ----------------------------------------------------------
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    target_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except OSError as exc:
+        # понятная ошибка вместо «[Errno 2] No such file or directory»
+        raise ValueError(
+            f"папка «{target_dir}» недоступна для записи ({type(exc).__name__}: {exc}). "
+            "Проверьте путь в поле «Куда сохранить» — возможно, диск не подключён."
+        ) from exc
 
     if options.mode == MODE_FILES:
         base_dir = os.path.dirname(os.path.abspath(out_path)) or "."

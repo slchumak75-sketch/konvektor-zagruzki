@@ -338,3 +338,65 @@ def test_new_conversion_disables_open_buttons(gui):
     _run(app)
     assert app.open_file_btn.cget("state") == "disabled"
     assert app.open_folder_btn.cget("state") == "disabled"
+
+
+def test_path_changed_after_convert_is_used(gui, tmp_path):
+    """Путь, изменённый после «Конвертировать», уважается при «Сохранить».
+
+    Раньше сохранялся снимок пути времён конвертации, и файл уходил
+    в старую папку — «сохраняет не туда, куда указываю».
+    """
+    app, _, _ = gui
+    new_folder = tmp_path / "куда указал"
+    app.on_convert()
+    _run(app)
+    app.out_var.set(str(new_folder))
+    app.on_save()
+    _run(app)
+    assert [p.name for p in new_folder.iterdir()] == [f"ООО ОМА {TODAY}.xlsx"]
+    assert app._last_outputs == [str(new_folder / f"ООО ОМА {TODAY}.xlsx")]
+
+
+def test_path_is_normalised(gui, tmp_path, monkeypatch):
+    """Кавычки, лишние пробелы, «~», полный путь к файлу — всё приводится к папке."""
+    app, module, _ = gui
+    folder = tmp_path / "итоги"
+    folder.mkdir()
+    app.out_var.set(f'  "{folder}"  ')
+    assert app.output_dir() == str(folder)
+
+    app.out_var.set(str(folder) + os.sep)
+    assert app.output_dir() == str(folder)
+
+    # указали файл — берём его папку
+    app.out_var.set(str(folder / "ООО ОМА 15.11.2026.xlsx"))
+    assert app.output_dir() == str(folder)
+    target = folder / "старый.xlsx"
+    target.write_text("x")
+    app.out_var.set(str(target))
+    assert app.output_dir() == str(folder)
+
+    # «~» раскрывается в домашнюю папку
+    app.out_var.set("~")
+    assert app.output_dir() == os.path.expanduser("~")
+
+
+def test_save_warns_when_written_elsewhere(gui, tmp_path):
+    """Если записать по указанному пути не вышло, видно и куда просили, и куда сохранили."""
+    app, module, dialogs = gui
+    app.on_convert()
+    _run(app)
+
+    planned = str(tmp_path / "куда просили" / f"ООО ОМА {TODAY}.xlsx")
+    actual = str(tmp_path / f"ООО ОМА {TODAY}.xlsx")
+    result = app._pending_result
+    result.planned_output = planned
+    result.outputs = [actual]
+    result.notes = ["не удалось записать ...; результат сохранён в ..."]
+
+    dialogs.calls.clear()
+    app._saved(result)
+    assert any(call[0] == "showwarning" for call in dialogs.calls)
+    warned = [c for c in dialogs.calls if c[0] == "showwarning"][0]
+    text = warned[1][1]
+    assert planned in text and actual in text
