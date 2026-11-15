@@ -45,6 +45,7 @@ def gui(monkeypatch, known_paths, tmp_path):
 
 
 def _run(app):
+    """Дождаться фонового потока и разобрать очередь сообщений."""
     deadline = time.time() + 120
     while time.time() < deadline:
         if app._worker is not None and not app._worker.is_alive() and app._queue.empty():
@@ -59,10 +60,13 @@ def test_window_builds_with_single_file(gui, known_paths):
     assert len(app.files) == 1
     assert app.file_var.get().startswith("Кореличи")
     assert "Конвектор" in app.title()
-    # предпросмотр — таблица шаблона + «файл» и «строка»
-    assert len(app.preview.columns_list) == 12
-    assert app.preview.headings["файл"] == "файл"
-    assert app.preview.headings["строка"] == "строка"
+    # предпросмотр — ровно 10 колонок шаблона, без лишних
+    assert len(app.preview.columns_list) == 10
+    assert app.preview.headings["Наименование товара"] == "Наименование товара"
+    assert "файл" not in app.preview.headings
+    assert "строка" not in app.preview.headings
+    # разлиновка: чередование строк настроено
+    assert "odd" in app.preview.tags and "even" in app.preview.tags
 
 
 def test_only_one_file_at_a_time(gui, known_paths):
@@ -84,16 +88,25 @@ def test_unsupported_files_are_ignored(gui, tmp_path):
     assert app.files == before
 
 
-def test_default_output_is_documents_and_one_file(gui):
-    """Пустое поле «Итоговый файл» = «Документы/поставщик дата.xlsx», без подпапок."""
+def test_convert_only_previews_and_save_writes_file(gui):
+    """«Конвертировать» показывает таблицу, файл пишет только «Сохранить»."""
     app, module, _ = gui
-    assert app.out_var.get() == ""
     app.on_convert()
     _run(app)
-    assert app._last_outputs, "результат не записан"
-    path = app._last_outputs[0]
-    assert path == os.path.join(app.test_documents, "ООО ОМА 19.10.2026.xlsx"), path
-    assert os.path.exists(path)
+    # ничего не записано, но путь известен
+    assert app._last_outputs == []
+    assert not os.listdir(app.test_documents)
+    assert app._pending_result is not None and app._pending_result.items_count == 11
+    expected = os.path.join(app.test_documents, "ООО ОМА 19.10.2026.xlsx")
+    assert app._pending_result.planned_output == expected
+    assert app.save_btn.cget("state") == "normal"
+    # подсказка не затирается автоочисткой списка
+    assert "будет сохранено" in app.hint_var.get()
+
+    app.on_save()
+    _run(app)
+    assert app._last_outputs == [expected]
+    assert os.path.exists(expected)
     assert os.listdir(app.test_documents) == ["ООО ОМА 19.10.2026.xlsx"]
 
 
@@ -117,8 +130,18 @@ def test_explicit_output_path_is_used(gui, tmp_path):
     app.out_var.set(str(target))
     app.on_convert()
     _run(app)
+    assert not target.exists()  # конвертация ничего не пишет
+    app.on_save()
+    _run(app)
     assert target.exists()
     assert app._last_outputs == [str(target)]
+
+
+def test_save_button_is_disabled_until_conversion(gui):
+    app, _, dialogs = gui
+    assert app.save_btn.cget("state") == "disabled"
+    app.on_save()  # ничего не должно произойти
+    assert app._last_outputs == []
 
 
 def test_preview_shows_converted_table(gui):
@@ -128,9 +151,9 @@ def test_preview_shows_converted_table(gui):
     rows = app.preview.rows
     assert len(rows) == 11  # «Кореличи» — 11 позиций
     first = rows[0][1]
-    assert first[2].startswith("Грунтовка") or first[2]
-    assert first[10].startswith("Кореличи")  # колонка «файл»
-    assert first[11]  # колонка «строка»
+    assert len(first) == 10  # только колонки шаблона
+    assert first[2]  # наименование
+    assert "," in first[5]  # числа показываем как в Excel — с запятой
 
 
 def test_list_is_cleared_after_conversion(gui):

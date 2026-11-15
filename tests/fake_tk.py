@@ -92,6 +92,10 @@ class Tk(Widget):
         return None
 
 
+class Frame(Widget):
+    """Рамка: используется для видимой границы вокруг таблицы."""
+
+
 class Listbox(Widget):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -201,7 +205,11 @@ class Treeview(Widget):
         self.headings: Dict[str, str] = {}
         self.widths: Dict[str, int] = {}
         self.rows: List[tuple] = []
+        self.tags: Dict[str, dict] = {}
         self._next_id = 0
+
+    def tag_configure(self, name, **k):
+        self.tags[name] = dict(k)
 
     def heading(self, column, **k):
         self.headings[column] = k.get("text", "")
@@ -214,6 +222,7 @@ class Treeview(Widget):
         self._next_id += 1
         row_id = f"I{self._next_id:03d}"
         self.rows.append((row_id, tuple(values or ())))
+        self.last_tags = tuple(k.get("tags") or ())
         return row_id
 
     def delete(self, *items):
@@ -233,6 +242,35 @@ class Treeview(Widget):
         return None
 
     def xview(self, *a):
+        return None
+
+
+class Style(Widget):
+    """Заглушка ttk.Style: тема, настройки и карты состояний."""
+
+    _installed_theme = ""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.settings: Dict[str, dict] = {}
+        self.maps: Dict[str, dict] = {}
+
+    def theme_names(self):
+        return ("clam", "default")
+
+    def theme_use(self, name=None):
+        if name is None:
+            return Style._installed_theme or "default"
+        Style._installed_theme = name
+        return name
+
+    def configure(self, name, **k):
+        self.settings.setdefault(name, {}).update(k)
+
+    def map(self, name, **k):
+        self.maps.setdefault(name, {}).update(k)
+
+    def layout(self, *a, **k):
         return None
 
 
@@ -280,7 +318,18 @@ def install() -> types.ModuleType:
     filedialog = types.ModuleType("tkinter.filedialog")
     messagebox = types.ModuleType("tkinter.messagebox")
 
-    for cls in (Widget, Tk, Listbox, Text, Variable, Combobox, Progressbar, Treeview):
+    for cls in (
+        Widget,
+        Tk,
+        Frame,
+        Listbox,
+        Text,
+        Variable,
+        Combobox,
+        Progressbar,
+        Treeview,
+        Style,
+    ):
         setattr(tk, cls.__name__, cls)
     tk.StringVar = Variable
     tk.BooleanVar = Variable
@@ -303,6 +352,7 @@ def install() -> types.ModuleType:
     ttk.Combobox = Combobox
     ttk.Progressbar = Progressbar
     ttk.Treeview = Treeview
+    ttk.Style = Style
 
     dialogs = _Dialog()
     for name in ("askopenfilenames", "askopenfilename", "askdirectory", "asksaveasfilename"):

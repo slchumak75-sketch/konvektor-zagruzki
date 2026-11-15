@@ -280,3 +280,21 @@ def test_auto_naming_uses_supplier_and_date_file(known_paths, tmp_path):
     assert os.path.exists(written)
     # никаких подпапок поставщика
     assert [p.name for p in tmp_path.iterdir()] == ["ООО ОМА 19.10.2026.xlsx"]
+
+
+def test_write_false_only_plans_file(known_paths, tmp_path):
+    """write=False: считаем и показываем таблицу, но файл не создаём (кнопка «Сохранить»)."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    result = convert(
+        [str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path), write=False)
+    )
+    assert result.items_count == 11
+    assert result.outputs == []
+    assert list(tmp_path.iterdir()) == []
+    expected = str(tmp_path / "ООО ОМА 19.10.2026.xlsx")
+    assert result.planned_output == expected, result.planned_output
+    # предпросмотр строится из тех же позиций, что попали бы в книгу
+    assert len(result.items) == 11
+    assert result.items[0].name

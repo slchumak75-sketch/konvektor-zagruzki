@@ -70,13 +70,16 @@ FILE_TYPES = [
     ("Все файлы", "*.*"),
 ]
 
-#: Колонки предпросмотра: шаблон + источник строки.
-PREVIEW_COLUMNS = list(TEMPLATE_COLUMNS) + ["файл", "строка"]
+#: Колонки предпросмотра — только шаблон (лишних колонок в окне нет;
+#: «файл» и «строка» остаются только в сохранённом файле).
+PREVIEW_COLUMNS = list(TEMPLATE_COLUMNS)
 #: Ширины — в пикселях (у Treeview width именно пиксели, а не символы).
-PREVIEW_WIDTHS = [120, 100, 340, 70, 80, 90, 100, 80, 100, 110, 200, 60]
-PREVIEW_MIN_WIDTHS = [90, 70, 160, 55, 60, 70, 80, 60, 80, 90, 120, 50]
+PREVIEW_WIDTHS = [125, 105, 380, 75, 85, 95, 105, 85, 105, 115]
+PREVIEW_MIN_WIDTHS = [90, 70, 160, 55, 60, 70, 80, 60, 80, 90]
+#: Цвет линий таблицы
+GRID_COLOR = "#9DB2C8"
 #: Числовые колонки выравниваем по правому краю, как в Excel.
-_NUMERIC_PREVIEW = {"кол-во", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС", "строка"}
+_NUMERIC_PREVIEW = {"количество", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС"}
 
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
@@ -97,6 +100,9 @@ class KonvektorApp(_Base):
         self._running = False
         self._last_outputs: List[str] = []
         self.log_lines: List[str] = []
+        self._pending_source: Optional[str] = None
+        self._pending_out: str = ""
+        self._pending_result: Optional[ConvertResult] = None
 
         self._set_window_icon()
         self._build_ui()
@@ -169,6 +175,10 @@ class KonvektorApp(_Base):
         act.pack(fill="x", padx=10, pady=4)
         self.run_btn = ttk.Button(act, text="Конвертировать", command=self.on_convert)
         self.run_btn.pack(side="left")
+        self.save_btn = ttk.Button(
+            act, text="Сохранить", command=self.on_save, state="disabled"
+        )
+        self.save_btn.pack(side="left", padx=(8, 0))
 
         # --- 3. предпросмотр результата вместо журнала
         bottom = ttk.LabelFrame(self, text="3. Результат (таблица)")
@@ -177,9 +187,24 @@ class KonvektorApp(_Base):
         table_wrap = ttk.Frame(bottom)
         table_wrap.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.preview = ttk.Treeview(
-            table_wrap, columns=PREVIEW_COLUMNS, show="headings", height=12
+        self._setup_table_style()
+        # рамка вокруг таблицы не зависит от темы оформления Windows
+        grid_box = tk.Frame(
+            table_wrap, bd=1, relief="solid", highlightthickness=0,
+            background=GRID_COLOR,
         )
+        grid_box.pack(fill="both", expand=True)
+        self.preview = ttk.Treeview(
+            grid_box,
+            columns=PREVIEW_COLUMNS,
+            show="headings",
+            height=12,
+            style="Grid.Treeview",
+            selectmode="browse",
+        )
+        # «разлиновка»: чередование строк, как в Excel
+        self.preview.tag_configure("odd", background="#F2F6FB")
+        self.preview.tag_configure("even", background="#FFFFFF")
         for title, width, min_width in zip(
             PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS
         ):
@@ -193,8 +218,8 @@ class KonvektorApp(_Base):
                 stretch=(title == "Наименование товара"),
             )
 
-        yscroll = ttk.Scrollbar(table_wrap, orient="vertical", command=self.preview.yview)
-        xscroll = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.preview.xview)
+        yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self.preview.yview)
+        xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self.preview.xview)
         self.preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
         yscroll.pack(side="right", fill="y")
         xscroll.pack(side="bottom", fill="x")
@@ -204,6 +229,34 @@ class KonvektorApp(_Base):
         ttk.Label(bottom, textvariable=self.hint_var, foreground="#555555").pack(
             anchor="w", padx=8, pady=(0, 6)
         )
+
+    def _setup_table_style(self) -> None:
+        """Разлиновка таблицы: подсветка строк через одну, объёмная шапка, высота строк."""
+        try:
+            style = ttk.Style(self)
+            style.configure(
+                "Grid.Treeview",
+                background="#FFFFFF",
+                fieldbackground="#FFFFFF",
+                foreground="#000000",
+                rowheight=23,
+                borderwidth=1,
+                relief="solid",
+                font=("Segoe UI", 9),
+            )
+            style.configure(
+                "Grid.Treeview.Heading",
+                background="#DCE6F1",
+                foreground="#1F4E78",
+                relief="raised",
+                borderwidth=1,
+                padding=(4, 4),
+                font=("Segoe UI", 9, "bold"),
+            )
+            style.map("Grid.Treeview.Heading", background=[("active", "#CFE0F5")])
+            style.map("Grid.Treeview", background=[("selected", "#BBDEFB")])
+        except Exception:  # noqa: BLE001 - оформление не должно ломать окно
+            pass
 
     # ------------------------------------------------------------- действия
     def on_add_files(self) -> None:
@@ -236,14 +289,20 @@ class KonvektorApp(_Base):
         out = self.out_var.get().strip()
         options = ConvertOptions(
             mode=MODE_COMBINED,
-            # колонки «файл» и «строка» нужны всегда
+            # колонки «файл» и «строка» нужны всегда (в сохранённом файле)
             add_source_columns=True,
-            # без явного пути — «поставщик/дата.xlsx»
+            # без явного пути — «Документы/поставщик дата.xlsx»
             naming="path" if out else "auto",
+            # «Конвертировать» только показывает таблицу; пишет «Сохранить»
+            write=False,
         )
 
         self._running = True
         self.run_btn.configure(state="disabled")
+        self.save_btn.configure(state="disabled")
+        self._pending_source = path
+        self._pending_out = out
+        self._pending_result = None
         self.hint_var.set("")
         self._log_clear()
         self._clear_preview()
@@ -260,6 +319,56 @@ class KonvektorApp(_Base):
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
 
+    def on_save(self) -> None:
+        """Записать разобранную таблицу в xlsx (кнопка «Сохранить»)."""
+        if self._running or self._pending_result is None:
+            return
+        if not self._pending_result.items_count:
+            messagebox.showwarning(APP_NAME, "Нечего сохранять: позиции не найдены.")
+            return
+
+        path = self._pending_source or ""
+        if not path or not os.path.exists(path):
+            messagebox.showwarning(
+                APP_NAME, "Исходный файл больше недоступен — выберите его снова."
+            )
+            return
+
+        out = (self._pending_out or self.out_var.get()).strip()
+        options = ConvertOptions(
+            mode=MODE_COMBINED,
+            add_source_columns=True,
+            naming="path" if out else "auto",
+            write=True,
+        )
+
+        self._running = True
+        self.save_btn.configure(state="disabled")
+        self.run_btn.configure(state="disabled")
+
+        def worker() -> None:
+            try:
+                result = convert([path], out, options, log=lambda m: self._queue.put(("log", m)))
+                self._queue.put(("saved", result))
+            except Exception as exc:  # noqa: BLE001 - показываем пользователю
+                self._queue.put(("error", (exc, traceback.format_exc())))
+
+        self._worker = threading.Thread(target=worker, daemon=True)
+        self._worker.start()
+
+    def _saved(self, result: ConvertResult) -> None:
+        self._running = False
+        self.run_btn.configure(state="normal")
+        self.save_btn.configure(state="normal")
+        self._last_outputs = list(result.outputs)
+        if not result.outputs:
+            messagebox.showwarning(APP_NAME, "; ".join(result.errors) or "Файл не записан.")
+            return
+        written = result.outputs[0]
+        folder, name = os.path.split(written)
+        self.hint_var.set(f"Сохранено: {folder} / {name}")
+        messagebox.showinfo(APP_NAME, f"Файл сохранён:\n{written}")
+
     def _poll_queue(self) -> None:
         try:
             while True:
@@ -268,6 +377,8 @@ class KonvektorApp(_Base):
                     self._log(str(payload))
                 elif kind == "done":
                     self._finish(payload)
+                elif kind == "saved":
+                    self._saved(payload)
                 elif kind == "error":
                     self._fail(*payload)
         except queue.Empty:
@@ -278,6 +389,8 @@ class KonvektorApp(_Base):
         self._running = False
         self.run_btn.configure(state="normal")
         self._last_outputs = list(result.outputs)
+        self._pending_result = result
+        self.save_btn.configure(state="normal" if result.items_count else "disabled")
 
         self._show_preview(result.items)
         self._log("")
@@ -293,30 +406,34 @@ class KonvektorApp(_Base):
                     f"  ПРОВЕРИТЬ: {os.path.basename(path)} — доверие {report.confidence:.2f}"
                     f" ({report.quality}); " + "; ".join(report.reasons[:3])
                 )
-        for path in result.outputs:
-            self._log(f"Сохранено: {path}")
-
         docs = "; ".join(
             (m.supplier or "поставщик не найден")
             + (f", {m.doc_label}" if m.doc_number else "")
             + (f" от {m.date_text}" if m.doc_date else "")
             for m in result.metas.values()
         )
-        if result.outputs:
-            folder, name = os.path.split(result.outputs[0])
-            self.hint_var.set(f"Сохранено: {docs} → {folder} / {name}")
+        # файл обработан — список очищается сам (до подсказки, чтобы её не затёрло)
+        self._clear_files()
+
+        planned = result.planned_output
+        if planned and result.items_count:
+            folder, name = os.path.split(planned)
+            self.hint_var.set(
+                f"{docs} → будет сохранено: {folder} / {name} (кнопка «Сохранить»)"
+            )
         elif docs:
             self.hint_var.set(docs)
 
         if result.items_count:
             text = (
-                f"Готово.\n\nПозиций: {result.items_count}\n"
+                f"Таблица готова.\n\nПозиций: {result.items_count}\n"
                 f"Документ: {docs}\n"
                 f"Расхождений в суммах: {result.error_count}\n"
                 f"Предупреждений: {result.warning_count}\n"
-                f"Значений рассчитано программой: {result.computed_count}\n\n"
-                + "\n".join(result.outputs)
+                f"Значений рассчитано программой: {result.computed_count}"
             )
+            if planned:
+                text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
             if result.errors:
                 text += "\n\nОшибки: " + "; ".join(result.errors)
             if result.error_count:
@@ -330,9 +447,6 @@ class KonvektorApp(_Base):
                 "Проверьте, что в файле есть таблица с колонками "
                 "«наименование», «количество», «цена» и т.п.",
             )
-
-        # файл обработан — список очищается сам
-        self._clear_files()
 
     def _fail(self, exc: Exception, tb: str) -> None:
         self._running = False
@@ -358,10 +472,11 @@ class KonvektorApp(_Base):
                 item.vat_rate,
                 item.vat_sum,
                 item.sum_with_vat,
-                os.path.basename(item.source),
-                item.row,
             ]
-            self.preview.insert("", "end", values=[self._fmt(v) for v in values])
+            tag = "odd" if len(self.preview.get_children()) % 2 else "even"
+            self.preview.insert(
+                "", "end", values=[self._fmt(v) for v in values], tags=(tag,)
+            )
         if not items:
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
 

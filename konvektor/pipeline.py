@@ -64,6 +64,8 @@ class ConvertOptions:
     naming: str = "path"
     #: куда сохранять при naming="auto" (по умолчанию — папка «Документы»)
     output_dir: str = ""
+    #: писать ли файл сразу (False — только разобрать и показать таблицу)
+    write: bool = True
 
 
 @dataclass
@@ -78,6 +80,8 @@ class ConvertResult:
     metas: Dict[str, DocMeta] = field(default_factory=dict)
     #: метрики разбора по каждому файлу (покрытие полей, арифметика, доверие)
     analysis: Dict[str, AnalysisReport] = field(default_factory=dict)
+    #: куда файл был бы записан (заполняется и при write=False)
+    planned_output: str = ""
 
     @property
     def items_count(self) -> int:
@@ -330,10 +334,21 @@ def convert(
             out_path = output_path_for(metas.get(per_file_items[0][0]), base_dir)
         elif not out_path:
             out_path = default_output_name(base_dir)
+        result.planned_output = out_path
         log(f"  файл результата: {out_path}")
     elif not out_path:
-        base_dir = os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
+        base_dir = options.output_dir or os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
         out_path = default_output_name(base_dir)
+    result.planned_output = result.planned_output or out_path
+
+    if not options.write:
+        # только разбор и предпросмотр — файл запишет кнопка «Сохранить»
+        log(f"  файл не записан: нажмите «Сохранить» ({result.planned_output})")
+        log(
+            f"Готово: позиций {len(all_items)}, ошибок {result.error_count}, "
+            f"предупреждений {result.warning_count}, рассчитано {result.computed_count}"
+        )
+        return result
 
     # ---- запись ----------------------------------------------------------
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
