@@ -32,7 +32,6 @@ from .pipeline import (
     ConvertResult,
     convert,
     documents_dir,
-    downloads_dir,
     is_supported,
 )
 from .writer import plain_number
@@ -161,38 +160,28 @@ class KonvektorApp(_Base):
         mid = ttk.LabelFrame(self, text="2. Куда сохранить")
         mid.pack(fill="x", padx=10, pady=4)
 
-        self.out_var = tk.StringVar(value="")
-        self.folder_var = tk.StringVar(value="")
-
         row1 = ttk.Frame(mid)
         row1.pack(fill="x", padx=8, pady=(8, 2))
-        ttk.Label(row1, text="Папка сохранения:").pack(side="left")
-        ttk.Label(
-            row1, textvariable=self.folder_var, foreground="#1F4E78"
-        ).pack(side="left", padx=6)
-
-        row2 = ttk.Frame(mid)
-        row2.pack(fill="x", padx=8, pady=(0, 2))
-        ttk.Button(row2, text="Документы", command=self.on_use_documents).pack(side="left")
-        ttk.Button(row2, text="Загрузки", command=self.on_use_downloads).pack(
-            side="left", padx=(6, 0)
-        )
-        ttk.Button(row2, text="Другая папка…", command=self.on_browse_output).pack(
-            side="left", padx=(6, 0)
+        ttk.Label(row1, text="Путь:").pack(side="left")
+        # обычное поле пути, как в любой программе Windows: можно вписать любую
+        # папку (в том числе на другом диске), можно стереть — тогда «Документы»
+        self.out_var = tk.StringVar(value=documents_dir())
+        ttk.Entry(row1, textvariable=self.out_var).pack(
+            side="left", fill="x", expand=True, padx=6
         )
 
         ttk.Label(
             mid,
-            text="Выбирать папку не обязательно: по умолчанию файл кладётся "
-            "в «Документы». Имя программа задаёт сама — «поставщик дата.xlsx» "
+            text="Укажите папку, куда класть результат. Пусто — папка «Документы». "
+            "Кнопки не нужны: путь можно вписать или вставить из проводника. "
+            "Имя файла программа задаёт сама — «поставщик дата.xlsx» "
             "(например, «ООО ОМА 19.10.2026.xlsx»); если такой файл уже есть, "
-            "новый сохранится как «ООО ОМА 19.10.2026 (2).xlsx» — старый не затирается.",
+            "новый сохранится как «ООО ОМА 19.10.2026 (2).xlsx» — "
+            "старый не затирается.",
             foreground="#555555",
             wraplength=1040,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 8))
-
-        self._update_folder_label()
 
         # --- действие
         act = ttk.Frame(self)
@@ -288,36 +277,12 @@ class KonvektorApp(_Base):
         if path:
             self._add_files([path])
 
-    def on_use_documents(self) -> None:
-        """Сохранять в «Документы» — путь по умолчанию, ничего выбирать не нужно."""
-        self.out_var.set(documents_dir())
-        self._update_folder_label()
-
-    def on_use_downloads(self) -> None:
-        """Сохранять в «Загрузки»."""
-        self.out_var.set(downloads_dir())
-        self._update_folder_label()
-
-    def _update_folder_label(self) -> None:
-        self.folder_var.set(self.out_var.get().strip() or documents_dir())
-
-    def on_browse_output(self) -> None:
-        """Выбираем только папку: имя файла программа задаёт сама."""
-        folder = self.output_dir()
-        if not os.path.isdir(folder):
-            folder = documents_dir()
-        path = filedialog.askdirectory(
-            title="Куда сохранять результат", initialdir=folder, mustexist=False
-        )
-        if path:
-            self.out_var.set(os.path.normpath(path))
-            self._update_folder_label()
-
     def output_dir(self) -> str:
-        """Папка сохранения из поля «Папка» (пустая строка — «Документы»).
+        """Папка сохранения из поля «Путь» (пустая строка — «Документы»).
 
-        Если пользователь вставил полный путь к файлу (старая привычка),
-        берём папку из него: имя всё равно будет «поставщик дата.xlsx».
+        Можно вписать любую папку, в том числе на другом диске. Если вставили
+        полный путь к файлу — берём папку из него: имя всё равно будет
+        «поставщик дата.xlsx», как и просили.
         """
         value = self.out_var.get().strip().strip('"')
         if not value:

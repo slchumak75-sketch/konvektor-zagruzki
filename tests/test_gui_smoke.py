@@ -184,15 +184,21 @@ def test_quantity_and_vat_have_no_decimal_comma(gui):
     assert all("," not in rate for rate in rates), rates
 
 
-def test_folder_buttons_and_no_mandatory_choice(gui):
-    """Папку выбирать не обязательно: есть кнопки «Документы» и «Загрузки»."""
+def test_path_field_only_no_buttons(gui):
+    """Одно поле пути, как в обычной программе Windows: никаких кнопок выбора."""
     app, module, _ = gui
-    app.on_use_documents()
+    # по умолчанию подставлена папка «Документы»
     assert app.out_var.get() == module.documents_dir()
-    assert app.folder_var.get() == module.documents_dir()
-    app.on_use_downloads()
-    assert app.out_var.get() == module.downloads_dir()
-    assert app.folder_var.get() == module.downloads_dir()
+    # кнопок выбора папки больше нет
+    assert not hasattr(app, "on_use_documents")
+    assert not hasattr(app, "on_use_downloads")
+    assert not hasattr(app, "on_browse_output")
+    # путь можно стереть — тогда «Документы»
+    app.out_var.set("   ")
+    assert app.output_dir() == ""
+    # и вписать любой другой
+    app.out_var.set("D:\\Мои документы\\Конвектор")
+    assert app.output_dir() == "D:\\Мои документы\\Конвектор"
 
 
 def test_second_save_does_not_overwrite(gui):
@@ -243,12 +249,14 @@ def test_preview_shows_converted_table(gui):
 
 
 def test_list_is_cleared_after_conversion(gui):
-    app, _, _ = gui
+    app, module, _ = gui
+    app.out_var.set(r"D:\Итоги")
     app.on_convert()
     _run(app)
     assert app.files == []
     assert app.file_var.get() == "файл не выбран"
-    assert app.out_var.get() == ""
+    # путь сохранения — настройка, а не имя файла: он остаётся
+    assert app.out_var.get() == r"D:\Итоги"
 
 
 def test_convert_without_file_shows_warning(gui):
