@@ -236,7 +236,7 @@ def test_output_path_for():
     import datetime as dt
 
     from konvektor.meta import DocMeta
-    from konvektor.pipeline import output_path_for, safe_path_part
+    from konvektor.pipeline import documents_dir, output_filename, output_path_for, safe_path_part
 
     meta = DocMeta(
         supplier='ООО "Культбытхозторгплюс"', doc_date=dt.date(2026, 11, 12)
@@ -245,32 +245,38 @@ def test_output_path_for():
     assert safe_path_part("ООО «ОМА»") == "ООО ОМА"
     assert safe_path_part('a/b:c*?"<>|') == "a b c"
 
+    # папка поставщика не создаётся: поставщик и дата — в имени файла
+    assert output_filename(meta) == "ООО Культбытхозторгплюс 12.11.2026.xlsx"
     path = output_path_for(meta, "/tmp/база")
-    assert path == os.path.join("/tmp/база", "ООО Культбытхозторгплюс", "12.11.2026.xlsx")
+    assert path == os.path.join("/tmp/база", "ООО Культбытхозторгплюс 12.11.2026.xlsx")
+    # по умолчанию — папка «Документы»
+    assert output_path_for(meta) == os.path.join(
+        documents_dir(), "ООО Культбытхозторгплюс 12.11.2026.xlsx"
+    )
     # нет реквизитов — понятные имена, а не «None.xlsx»
     fallback = output_path_for(DocMeta(), "/tmp/база")
-    assert fallback.endswith("Поставщик не определён/Дата не найдена.xlsx")
+    assert fallback.endswith("Поставщик не определён Дата не найдена.xlsx")
 
 
-def test_auto_naming_writes_supplier_folder(known_paths, tmp_path):
-    """Режим naming="auto": результат ложится в папку поставщика с именем даты."""
+def test_documents_dir_exists():
+    from konvektor.pipeline import documents_dir
+
+    assert os.path.isdir(documents_dir())
+
+
+def test_auto_naming_uses_supplier_and_date_file(known_paths, tmp_path):
+    """naming="auto": один файл «поставщик дата.xlsx», без подпапок."""
     path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
     if path is None:
         pytest.skip("нет файла-образца")
     result = convert(
         [str(path)],
         "",
-        ConvertOptions(naming="auto", add_source_columns=True),
+        ConvertOptions(naming="auto", add_source_columns=True, output_dir=str(tmp_path)),
     )
     assert result.outputs, result.notes
     written = result.outputs[0]
-    folder, name = os.path.split(written)
-    assert name == "19.10.2026.xlsx", written
-    assert os.path.basename(folder) == "ООО ОМА", written
+    assert written == str(tmp_path / "ООО ОМА 19.10.2026.xlsx"), written
     assert os.path.exists(written)
-    # убираем за собой, чтобы не мусорить в репозитории
-    os.remove(written)
-    try:
-        os.rmdir(folder)
-    except OSError:
-        pass
+    # никаких подпапок поставщика
+    assert [p.name for p in tmp_path.iterdir()] == ["ООО ОМА 19.10.2026.xlsx"]

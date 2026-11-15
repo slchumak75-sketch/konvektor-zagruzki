@@ -72,7 +72,11 @@ FILE_TYPES = [
 
 #: Колонки предпросмотра: шаблон + источник строки.
 PREVIEW_COLUMNS = list(TEMPLATE_COLUMNS) + ["файл", "строка"]
-PREVIEW_WIDTHS = [16, 12, 46, 8, 10, 11, 12, 9, 12, 12, 26, 7]
+#: Ширины — в пикселях (у Treeview width именно пиксели, а не символы).
+PREVIEW_WIDTHS = [120, 100, 340, 70, 80, 90, 100, 80, 100, 110, 200, 60]
+PREVIEW_MIN_WIDTHS = [90, 70, 160, 55, 60, 70, 80, 60, 80, 90, 120, 50]
+#: Числовые колонки выравниваем по правому краю, как в Excel.
+_NUMERIC_PREVIEW = {"кол-во", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС", "строка"}
 
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
@@ -155,8 +159,8 @@ class KonvektorApp(_Base):
 
         ttk.Label(
             mid,
-            text="Пусто — сохранить рядом с исходным файлом как "
-            "«поставщик / дата документа.xlsx».",
+            text="Пусто — сохранить в папку «Документы» с именем "
+            "«поставщик дата документа.xlsx».",
             foreground="#555555",
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
@@ -165,10 +169,6 @@ class KonvektorApp(_Base):
         act.pack(fill="x", padx=10, pady=4)
         self.run_btn = ttk.Button(act, text="Конвертировать", command=self.on_convert)
         self.run_btn.pack(side="left")
-        self.progress = ttk.Progressbar(act, mode="indeterminate", length=240)
-        self.progress.pack(side="left", padx=12)
-        self.status = ttk.Label(act, text="Готов к работе")
-        self.status.pack(side="left", padx=6)
 
         # --- 3. предпросмотр результата вместо журнала
         bottom = ttk.LabelFrame(self, text="3. Результат (таблица)")
@@ -180,9 +180,18 @@ class KonvektorApp(_Base):
         self.preview = ttk.Treeview(
             table_wrap, columns=PREVIEW_COLUMNS, show="headings", height=12
         )
-        for title, width in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS):
-            self.preview.heading(title, text=title)
-            self.preview.column(title, width=width, anchor="w", stretch=False)
+        for title, width, min_width in zip(
+            PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS
+        ):
+            numeric = title in _NUMERIC_PREVIEW
+            self.preview.heading(title, text=title, anchor="center")
+            self.preview.column(
+                title,
+                width=width,
+                minwidth=min_width,
+                anchor="e" if numeric else "w",
+                stretch=(title == "Наименование товара"),
+            )
 
         yscroll = ttk.Scrollbar(table_wrap, orient="vertical", command=self.preview.yview)
         xscroll = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.preview.xview)
@@ -235,8 +244,6 @@ class KonvektorApp(_Base):
 
         self._running = True
         self.run_btn.configure(state="disabled")
-        self.progress.start(12)
-        self.status.configure(text="Конвертирую…")
         self.hint_var.set("")
         self._log_clear()
         self._clear_preview()
@@ -269,7 +276,6 @@ class KonvektorApp(_Base):
 
     def _finish(self, result: ConvertResult) -> None:
         self._running = False
-        self.progress.stop()
         self.run_btn.configure(state="normal")
         self._last_outputs = list(result.outputs)
 
@@ -290,8 +296,6 @@ class KonvektorApp(_Base):
         for path in result.outputs:
             self._log(f"Сохранено: {path}")
 
-        self.status.configure(text=f"Готово: {result.items_count} позиций")
-
         docs = "; ".join(
             (m.supplier or "поставщик не найден")
             + (f", {m.doc_label}" if m.doc_number else "")
@@ -300,7 +304,7 @@ class KonvektorApp(_Base):
         )
         if result.outputs:
             folder, name = os.path.split(result.outputs[0])
-            self.hint_var.set(f"Сохранено: {docs} → {os.path.basename(folder)}/{name}")
+            self.hint_var.set(f"Сохранено: {docs} → {folder} / {name}")
         elif docs:
             self.hint_var.set(docs)
 
@@ -332,9 +336,7 @@ class KonvektorApp(_Base):
 
     def _fail(self, exc: Exception, tb: str) -> None:
         self._running = False
-        self.progress.stop()
         self.run_btn.configure(state="normal")
-        self.status.configure(text="Ошибка")
         self._log("ОШИБКА: " + str(exc))
         self._log(tb)
         messagebox.showerror(APP_NAME, f"Произошла ошибка:\n{exc}")
@@ -397,11 +399,13 @@ class KonvektorApp(_Base):
         self._update_status()
 
     def _update_status(self) -> None:
+        """Состояние показываем в подсказке под таблицей, без отдельного поля."""
         if self._running:
             return
-        self.status.configure(
-            text="Готов к работе" if not self.files else "Файл выбран — нажмите «Конвертировать»"
-        )
+        if not self.files:
+            self.hint_var.set("")
+            return
+        self.hint_var.set("Файл выбран — нажмите «Конвертировать»")
 
     def _log(self, message: str) -> None:
         self.log_lines.append(message)

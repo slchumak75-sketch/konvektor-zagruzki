@@ -16,38 +16,13 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from .analysis import AnalysisReport, build_report, format_report
 from .extract import Item, extract_file
 from .meta import DocMeta, extract_meta, fmt_date
+from .readers import read_source
+from .validate import ValidationReport, check_document_totals, validate_items
+from .writer import FileStat, WorkbookPayload, write_workbook
 
 #: Символы, недопустимые в именах файлов Windows.
 _ILLEGAL_IN_NAME = '<>:"/\\|?*'
 
-
-def safe_path_part(name: str, limit: int = 80) -> str:
-    """Привести название к виду, допустимому в имени папки/файла Windows.
-
-    «ООО "Культбытхозторгплюс"» -> «ООО Культбытхозторгплюс».
-    """
-    text = (name or "").replace("«", " ").replace("»", " ").replace('"', " ")
-    for ch in _ILLEGAL_IN_NAME:
-        text = text.replace(ch, " ")
-    text = " ".join(text.split())
-    text = text.strip(" .")
-    if len(text) > limit:
-        text = text[:limit].rstrip(" .")
-    return text
-
-
-def output_path_for(meta: Optional[DocMeta], base_dir: str) -> str:
-    """Куда сложить результат: <папка>/<поставщик>/<дата документа>.xlsx.
-
-    Именно так просил заказчик: «наименование поставщика / дата». Если
-    поставщик или дата не найдены — понятные имена по умолчанию.
-    """
-    supplier = safe_path_part(meta.supplier if meta else "") or "Поставщик не определён"
-    date = safe_path_part(fmt_date(meta.doc_date) if meta else "") or "Дата не найдена"
-    return os.path.join(base_dir, supplier, f"{date}.xlsx")
-from .readers import read_source
-from .validate import ValidationReport, check_document_totals, validate_items
-from .writer import FileStat, WorkbookPayload, write_workbook
 
 SUPPORTED_EXTENSIONS = (
     ".xls",
@@ -85,8 +60,10 @@ class ConvertOptions:
     keep_warnings: bool = True
     #: добавить в итоговую таблицу колонки «файл» и «строка»
     add_source_columns: bool = False
-    #: "auto" — имя по поставщику и дате (поставщик/дата.xlsx), "path" — как указано
+    #: "auto" — папка «Документы» и имя «поставщик дата.xlsx», "path" — как указано
     naming: str = "path"
+    #: куда сохранять при naming="auto" (по умолчанию — папка «Документы»)
+    output_dir: str = ""
 
 
 @dataclass
@@ -123,6 +100,56 @@ class ConvertResult:
     @property
     def ok(self) -> bool:
         return bool(self.items) and not self.errors
+
+
+def safe_path_part(name: str, limit: int = 80) -> str:
+    """Привести название к виду, допустимому в имени папки/файла Windows.
+
+    «ООО "Культбытхозторгплюс"» -> «ООО Культбытхозторгплюс».
+    """
+    text = (name or "").replace("«", " ").replace("»", " ").replace('"', " ")
+    for ch in _ILLEGAL_IN_NAME:
+        text = text.replace(ch, " ")
+    text = " ".join(text.split())
+    text = text.strip(" .")
+    if len(text) > limit:
+        text = text[:limit].rstrip(" .")
+    return text
+
+
+def documents_dir() -> str:
+    """Папка «Документы» пользователя (по умолчанию результат кладём туда).
+
+    Windows: C:\\Users\\<имя>\\Documents. Если папки с таким именем нет —
+    пробуем русские названия, затем домашнюю папку.
+    """
+    home = os.path.expanduser("~")
+    for name in ("Documents", "Документы", "Мои документы"):
+        candidate = os.path.join(home, name)
+        if os.path.isdir(candidate):
+            return candidate
+    return home
+
+
+def output_filename(meta: Optional[DocMeta], separator: str = " ") -> str:
+    """Имя файла результата: «поставщик дата.xlsx».
+
+    Слэш в имени файла Windows запрещён, поэтому «поставщик/дата» из
+    технического задания превращается в «поставщик дата» (разделитель —
+    пробел; можно задать другой).
+    """
+    supplier = safe_path_part(meta.supplier if meta else "") or "Поставщик не определён"
+    date = safe_path_part(fmt_date(meta.doc_date) if meta else "") or "Дата не найдена"
+    return safe_path_part(f"{supplier}{separator}{date}", limit=150) + ".xlsx"
+
+
+def output_path_for(meta: Optional[DocMeta], base_dir: str = "") -> str:
+    """Куда сложить результат: <папка>/<поставщик дата>.xlsx.
+
+    По умолчанию папка — «Документы»; подпапки поставщика не создаются:
+    поставщик и дата уже в имени файла.
+    """
+    return os.path.join(base_dir or documents_dir(), output_filename(meta))
 
 
 def _noop(msg: str) -> None:  # pragma: no cover - значение по умолчанию
@@ -298,12 +325,12 @@ def convert(
 
     # ---- куда писать -----------------------------------------------------
     if options.naming == "auto":
-        base_dir = os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
+        base_dir = options.output_dir or documents_dir()
         if len(per_file_items) == 1:
             out_path = output_path_for(metas.get(per_file_items[0][0]), base_dir)
         elif not out_path:
             out_path = default_output_name(base_dir)
-        log(f"  имя результата: {os.path.relpath(out_path, base_dir)}")
+        log(f"  файл результата: {out_path}")
     elif not out_path:
         base_dir = os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
         out_path = default_output_name(base_dir)
@@ -318,7 +345,7 @@ def convert(
             if not items:
                 continue
             if options.naming == "auto":
-                name = output_path_for(metas.get(path), base_dir)
+                name = output_path_for(metas.get(path), options.output_dir or documents_dir())
             else:
                 name = _unique_path(base_dir, stem, path)
             payload = WorkbookPayload(

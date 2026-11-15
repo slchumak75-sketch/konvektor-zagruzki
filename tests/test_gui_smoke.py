@@ -18,8 +18,14 @@ from tests import fake_tk
 
 
 @pytest.fixture()
-def gui(monkeypatch, known_paths):
+def gui(monkeypatch, known_paths, tmp_path):
     dialogs = fake_tk.install()
+    # «Документы» подменяем временной папкой, чтобы тесты не писали в профиль
+    import konvektor.pipeline as pipeline_module
+
+    documents = tmp_path / "Документы"
+    documents.mkdir()
+    monkeypatch.setattr(pipeline_module, "documents_dir", lambda: str(documents))
     import konvektor.gui as gui_module
 
     module = importlib.reload(gui_module)
@@ -30,6 +36,7 @@ def gui(monkeypatch, known_paths):
     )
     app = module.KonvektorApp(initial_files=[str(sample)])
     app.fake_dialogs = dialogs
+    app.test_documents = str(documents)
     yield app, module, dialogs
     # вернуть «настоящее» состояние модуля
     for name in ("tkinter", "tkinter.ttk", "tkinter.filedialog", "tkinter.messagebox"):
@@ -77,18 +84,31 @@ def test_unsupported_files_are_ignored(gui, tmp_path):
     assert app.files == before
 
 
-def test_default_output_name_is_supplier_and_date(gui):
-    """Пустое поле «Итоговый файл» = поставщик/дата.xlsx рядом с исходником."""
+def test_default_output_is_documents_and_one_file(gui):
+    """Пустое поле «Итоговый файл» = «Документы/поставщик дата.xlsx», без подпапок."""
     app, module, _ = gui
     assert app.out_var.get() == ""
     app.on_convert()
     _run(app)
     assert app._last_outputs, "результат не записан"
     path = app._last_outputs[0]
-    folder, name = os.path.split(path)
-    assert name == "19.10.2026.xlsx", path
-    assert os.path.basename(folder) == "ООО ОМА", path
+    assert path == os.path.join(app.test_documents, "ООО ОМА 19.10.2026.xlsx"), path
     assert os.path.exists(path)
+    assert os.listdir(app.test_documents) == ["ООО ОМА 19.10.2026.xlsx"]
+
+
+def test_no_status_field_and_no_progressbar(gui, known_paths):
+    """Надпись «Готов к работе» и шкала прогресса убраны."""
+    app, _, _ = gui
+    assert not hasattr(app, "status")
+    assert not hasattr(app, "progress")
+
+    app._clear_files()
+    assert app.hint_var.get() == ""
+
+    other = next(p for p in known_paths if p.name.startswith("КХ2104033"))
+    app._add_files([str(other)])
+    assert app.hint_var.get().startswith("Файл выбран")
 
 
 def test_explicit_output_path_is_used(gui, tmp_path):
