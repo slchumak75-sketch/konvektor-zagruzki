@@ -82,7 +82,15 @@ jobs:
         shell: pwsh
         run: |
           .\dist\Konvektor-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
+
           .\dist\Konvektor-cli.exe --selftest .
+          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe не прошла: код $LASTEXITCODE" }
+
+          .\dist\Konvektor-cli.exe --selftest . --json > $env:TEMP\selftest.json
+          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe (--json) не прошла: код $LASTEXITCODE" }
+          Get-Content $env:TEMP\selftest.json | Select-Object -Last 3
+
           if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
           Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
 
