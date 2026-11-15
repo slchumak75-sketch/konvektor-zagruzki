@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 
 import pytest
@@ -245,17 +246,24 @@ def test_output_path_for():
     assert safe_path_part("ООО «ОМА»") == "ООО ОМА"
     assert safe_path_part('a/b:c*?"<>|') == "a b c"
 
-    # папка поставщика не создаётся: поставщик и дата — в имени файла
-    assert output_filename(meta) == "ООО Культбытхозторгплюс 12.11.2026.xlsx"
+    # папка поставщика не создаётся: поставщик и дата — в имени файла.
+    # Дата в имени — дата сохранения (сегодняшняя), а не дата документа.
+    today = f"{dt.date.today():%d.%m.%Y}"
+    assert output_filename(meta) == f"ООО Культбытхозторгплюс {today}.xlsx"
+    # дату можно передать явно (например, для тестов)
+    assert (
+        output_filename(meta, date=dt.date(2026, 11, 12))
+        == "ООО Культбытхозторгплюс 12.11.2026.xlsx"
+    )
     path = output_path_for(meta, "/tmp/база")
-    assert path == os.path.join("/tmp/база", "ООО Культбытхозторгплюс 12.11.2026.xlsx")
+    assert path == os.path.join("/tmp/база", f"ООО Культбытхозторгплюс {today}.xlsx")
     # по умолчанию — папка «Документы»
     assert output_path_for(meta) == os.path.join(
-        documents_dir(), "ООО Культбытхозторгплюс 12.11.2026.xlsx"
+        documents_dir(), f"ООО Культбытхозторгплюс {today}.xlsx"
     )
     # нет реквизитов — понятные имена, а не «None.xlsx»
     fallback = output_path_for(DocMeta(), "/tmp/база")
-    assert fallback.endswith("Поставщик не определён Дата не найдена.xlsx")
+    assert fallback.endswith(f"Поставщик не определён {today}.xlsx")
 
 
 def test_documents_dir_exists():
@@ -276,10 +284,11 @@ def test_auto_naming_uses_supplier_and_date_file(known_paths, tmp_path):
     )
     assert result.outputs, result.notes
     written = result.outputs[0]
-    assert written == str(tmp_path / "ООО ОМА 19.10.2026.xlsx"), written
+    today = f"{dt.date.today():%d.%m.%Y}"
+    assert written == str(tmp_path / f"ООО ОМА {today}.xlsx"), written
     assert os.path.exists(written)
     # никаких подпапок поставщика
-    assert [p.name for p in tmp_path.iterdir()] == ["ООО ОМА 19.10.2026.xlsx"]
+    assert [p.name for p in tmp_path.iterdir()] == [f"ООО ОМА {today}.xlsx"]
 
 
 def test_write_false_only_plans_file(known_paths, tmp_path):
@@ -293,7 +302,7 @@ def test_write_false_only_plans_file(known_paths, tmp_path):
     assert result.items_count == 11
     assert result.outputs == []
     assert list(tmp_path.iterdir()) == []
-    expected = str(tmp_path / "ООО ОМА 19.10.2026.xlsx")
+    expected = str(tmp_path / f"ООО ОМА {dt.date.today():%d.%m.%Y}.xlsx")
     assert result.planned_output == expected, result.planned_output
     # предпросмотр строится из тех же позиций, что попали бы в книгу
     assert len(result.items) == 11
@@ -347,14 +356,15 @@ def test_repeated_conversion_creates_new_file(known_paths, tmp_path):
     path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
     if path is None:
         pytest.skip("нет файла-образца")
+    today = f"{dt.date.today():%d.%m.%Y}"
     first = convert(
         [str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path))
     )
     second = convert(
         [str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path))
     )
-    assert first.outputs == [str(tmp_path / "ООО ОМА 19.10.2026.xlsx")]
-    assert second.outputs == [str(tmp_path / "ООО ОМА 19.10.2026 (2).xlsx")]
+    assert first.outputs == [str(tmp_path / f"ООО ОМА {today}.xlsx")]
+    assert second.outputs == [str(tmp_path / f"ООО ОМА {today} (2).xlsx")]
     assert len(list(tmp_path.iterdir())) == 2
     # первый файл остался на месте
     assert os.path.exists(first.outputs[0])
@@ -365,13 +375,14 @@ def test_planned_output_is_unique_too(known_paths, tmp_path):
     path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
     if path is None:
         pytest.skip("нет файла-образца")
-    (tmp_path / "ООО ОМА 19.10.2026.xlsx").write_text("старый результат")
+    today = f"{dt.date.today():%d.%m.%Y}"
+    (tmp_path / f"ООО ОМА {today}.xlsx").write_text("старый результат")
     result = convert(
         [str(path)],
         "",
         ConvertOptions(naming="auto", output_dir=str(tmp_path), write=False),
     )
-    assert result.planned_output == str(tmp_path / "ООО ОМА 19.10.2026 (2).xlsx")
+    assert result.planned_output == str(tmp_path / f"ООО ОМА {today} (2).xlsx")
 
 
 def test_downloads_dir_exists():

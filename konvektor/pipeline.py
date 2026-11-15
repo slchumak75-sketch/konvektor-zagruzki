@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import tempfile
 import traceback
@@ -163,25 +164,35 @@ def unique_output_path(path: str) -> str:
         i += 1
 
 
-def output_filename(meta: Optional[DocMeta], separator: str = " ") -> str:
+def output_filename(
+    meta: Optional[DocMeta],
+    separator: str = " ",
+    date: Optional[_dt.date] = None,
+) -> str:
     """Имя файла результата: «поставщик дата.xlsx».
 
+    Дата в имени — **дата сохранения** (сегодняшняя), а не дата документа:
+    так просил пользователь. Дату документа видно в листах «Сводка» и «Проверки».
     Слэш в имени файла Windows запрещён, поэтому «поставщик/дата» из
     технического задания превращается в «поставщик дата» (разделитель —
     пробел; можно задать другой).
     """
     supplier = safe_path_part(meta.supplier if meta else "") or "Поставщик не определён"
-    date = safe_path_part(fmt_date(meta.doc_date) if meta else "") or "Дата не найдена"
-    return safe_path_part(f"{supplier}{separator}{date}", limit=150) + ".xlsx"
+    day = date or _dt.date.today()
+    return safe_path_part(f"{supplier}{separator}{fmt_date(day)}", limit=150) + ".xlsx"
 
 
-def output_path_for(meta: Optional[DocMeta], base_dir: str = "") -> str:
+def output_path_for(
+    meta: Optional[DocMeta],
+    base_dir: str = "",
+    date: Optional[_dt.date] = None,
+) -> str:
     """Куда сложить результат: <папка>/<поставщик дата>.xlsx.
 
     По умолчанию папка — «Документы»; подпапки поставщика не создаются:
-    поставщик и дата уже в имени файла.
+    поставщик и дата сохранения уже в имени файла.
     """
-    return os.path.join(base_dir or documents_dir(), output_filename(meta))
+    return os.path.join(base_dir or documents_dir(), output_filename(meta, date=date))
 
 
 def _noop(msg: str) -> None:  # pragma: no cover - значение по умолчанию
@@ -356,11 +367,12 @@ def convert(
     result.stats = stats
 
     # ---- куда писать -----------------------------------------------------
+    today = _dt.date.today()  # дата сохранения — одна на весь запуск
     if options.naming == "auto":
         base_dir = options.output_dir or documents_dir()
         if len(per_file_items) == 1:
             out_path = unique_output_path(
-                output_path_for(metas.get(per_file_items[0][0]), base_dir)
+                output_path_for(metas.get(per_file_items[0][0]), base_dir, date=today)
             )
         elif not out_path:
             out_path = unique_output_path(default_output_name(base_dir))
@@ -391,7 +403,9 @@ def convert(
                 continue
             if options.naming == "auto":
                 name = unique_output_path(
-                    output_path_for(metas.get(path), options.output_dir or documents_dir())
+                    output_path_for(
+                        metas.get(path), options.output_dir or documents_dir(), date=today
+                    )
                 )
             else:
                 name = _unique_path(base_dir, stem, path)

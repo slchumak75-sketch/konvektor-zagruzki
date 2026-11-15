@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib
+import datetime as dt
 import os
 import sys
 import time
@@ -30,7 +31,7 @@ def gui(monkeypatch, known_paths, tmp_path):
 
     module = importlib.reload(gui_module)
     monkeypatch.setattr(gui_module, "Tk", fake_tk.Tk, raising=False)
-    # файл с известным поставщиком и датой: ООО "ОМА", 19.10.2026
+    # файл с известным поставщиком: ООО "ОМА" (дата в имени — сегодняшняя)
     sample = next(
         (p for p in known_paths if p.name.startswith("Кореличи")), known_paths[0]
     )
@@ -42,6 +43,9 @@ def gui(monkeypatch, known_paths, tmp_path):
     for name in ("tkinter", "tkinter.ttk", "tkinter.filedialog", "tkinter.messagebox"):
         sys.modules.pop(name, None)
     importlib.reload(gui_module)
+
+
+TODAY = f"{dt.date.today():%d.%m.%Y}"
 
 
 def _run(app):
@@ -97,7 +101,7 @@ def test_convert_only_previews_and_save_writes_file(gui):
     assert app._last_outputs == []
     assert not os.listdir(app.test_documents)
     assert app._pending_result is not None and app._pending_result.items_count == 11
-    expected = os.path.join(app.test_documents, "ООО ОМА 19.10.2026.xlsx")
+    expected = os.path.join(app.test_documents, f"ООО ОМА {TODAY}.xlsx")
     assert app._pending_result.planned_output == expected
     assert app.save_btn.cget("state") == "normal"
     # подсказка не затирается автоочисткой списка
@@ -107,7 +111,7 @@ def test_convert_only_previews_and_save_writes_file(gui):
     _run(app)
     assert app._last_outputs == [expected]
     assert os.path.exists(expected)
-    assert os.listdir(app.test_documents) == ["ООО ОМА 19.10.2026.xlsx"]
+    assert os.listdir(app.test_documents) == [f"ООО ОМА {TODAY}.xlsx"]
 
     # в файле ровно 10 колонок образца: после «сумма с НДС» ничего нет
     from konvektor import TEMPLATE_COLUMNS
@@ -140,11 +144,11 @@ def test_output_field_is_folder_and_name_is_supplier_date(gui, tmp_path):
     app.on_convert()
     _run(app)
     assert not folder.exists() or list(folder.iterdir()) == []  # ничего не пишем
-    expected = str(folder / "ООО ОМА 19.10.2026.xlsx")
+    expected = str(folder / f"ООО ОМА {TODAY}.xlsx")
     assert app._pending_result.planned_output == expected
     app.on_save()
     _run(app)
-    assert [p.name for p in folder.iterdir()] == ["ООО ОМА 19.10.2026.xlsx"]
+    assert [p.name for p in folder.iterdir()] == [f"ООО ОМА {TODAY}.xlsx"]
     assert app._last_outputs == [expected]
 
 
@@ -159,7 +163,7 @@ def test_file_path_in_folder_field_still_gives_supplier_date_name(gui, tmp_path)
     app.on_save()
     _run(app)
     names = [p.name for p in folder.iterdir()]
-    assert names == ["ООО ОМА 19.10.2026.xlsx"], names
+    assert names == [f"ООО ОМА {TODAY}.xlsx"], names
 
 
 def test_quantity_and_vat_have_no_decimal_comma(gui):
@@ -231,8 +235,8 @@ def test_second_save_does_not_overwrite(gui):
     assert second.endswith("(2).xlsx"), second
     assert os.path.exists(first) and os.path.exists(second)
     assert sorted(os.listdir(app.test_documents)) == [
-        "ООО ОМА 19.10.2026 (2).xlsx",
-        "ООО ОМА 19.10.2026.xlsx",
+        f"ООО ОМА {TODAY} (2).xlsx",
+        f"ООО ОМА {TODAY}.xlsx",
     ]
 
 

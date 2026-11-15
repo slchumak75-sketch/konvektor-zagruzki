@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
@@ -97,11 +98,11 @@ def test_output_is_folder_and_name_is_supplier_date(known_paths, tmp_path, capsy
     # вариант 1: указали папку
     assert main([str(path), "-o", str(tmp_path), "--json", "-q"]) == 0
     payload = _first_json(capsys.readouterr().out)
-    expected = str(tmp_path / "ООО ОМА 19.10.2026.xlsx")
+    expected = str(tmp_path / f"ООО ОМА {dt.date.today():%d.%m.%Y}.xlsx")
     assert payload["outputs"] == [expected], payload["outputs"]
     # вариант 2: по привычке указали путь к файлу — имя всё равно своё
     other = tmp_path / "вторая"
     other.mkdir()
     assert main([str(path), "-o", str(other / "Результат.xlsx"), "--json", "-q"]) == 0
     payload = _first_json(capsys.readouterr().out)
-    assert payload["outputs"] == [str(other / "ООО ОМА 19.10.2026.xlsx")]
+    assert payload["outputs"] == [str(other / f"ООО ОМА {dt.date.today():%d.%m.%Y}.xlsx")]
