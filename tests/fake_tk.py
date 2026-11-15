@@ -192,6 +192,50 @@ class Combobox(Widget):
             var.set(value)
 
 
+class Treeview(Widget):
+    """Минимальная таблица: заголовки, колонки, строки."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.columns_list: List[str] = list(k.get("columns") or [])
+        self.headings: Dict[str, str] = {}
+        self.widths: Dict[str, int] = {}
+        self.rows: List[tuple] = []
+        self._next_id = 0
+
+    def heading(self, column, **k):
+        self.headings[column] = k.get("text", "")
+
+    def column(self, column, **k):
+        if "width" in k:
+            self.widths[column] = k["width"]
+
+    def insert(self, parent, index, values=None, **k):
+        self._next_id += 1
+        row_id = f"I{self._next_id:03d}"
+        self.rows.append((row_id, tuple(values or ())))
+        return row_id
+
+    def delete(self, *items):
+        drop = {i for i in items if isinstance(i, str)}
+        self.rows = [r for r in self.rows if r[0] not in drop]
+
+    def get_children(self, *a, **k):
+        return tuple(r[0] for r in self.rows)
+
+    def configure(self, *a, **k):
+        self.options.update(k)
+        return None
+
+    config = configure
+
+    def yview(self, *a):
+        return None
+
+    def xview(self, *a):
+        return None
+
+
 class Progressbar(Widget):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -218,6 +262,8 @@ class _Dialog:
             self.calls.append((name, a, k))
             if name == "askopenfilenames":
                 return self.open_result
+            if name == "askopenfilename":
+                return self.open_result[0] if self.open_result else ""
             if name == "askdirectory":
                 return self.dir_result
             if name == "asksaveasfilename":
@@ -234,7 +280,7 @@ def install() -> types.ModuleType:
     filedialog = types.ModuleType("tkinter.filedialog")
     messagebox = types.ModuleType("tkinter.messagebox")
 
-    for cls in (Widget, Tk, Listbox, Text, Variable, Combobox, Progressbar):
+    for cls in (Widget, Tk, Listbox, Text, Variable, Combobox, Progressbar, Treeview):
         setattr(tk, cls.__name__, cls)
     tk.StringVar = Variable
     tk.BooleanVar = Variable
@@ -256,9 +302,10 @@ def install() -> types.ModuleType:
         setattr(ttk, name, type(name, (Widget,), {}))
     ttk.Combobox = Combobox
     ttk.Progressbar = Progressbar
+    ttk.Treeview = Treeview
 
     dialogs = _Dialog()
-    for name in ("askopenfilenames", "askdirectory", "asksaveasfilename"):
+    for name in ("askopenfilenames", "askopenfilename", "askdirectory", "asksaveasfilename"):
         setattr(filedialog, name, getattr(dialogs, name))
     for name in ("showinfo", "showwarning", "showerror", "askyesno"):
         setattr(messagebox, name, getattr(dialogs, name))

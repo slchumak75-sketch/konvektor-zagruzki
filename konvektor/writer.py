@@ -124,7 +124,7 @@ def _write_data_sheet(ws: Worksheet, items: Sequence[Item], with_source: bool = 
     columns = list(TEMPLATE_COLUMNS)
     widths = list(COLUMN_WIDTHS)
     if with_source:
-        columns += ["файл-источник", "строка"]
+        columns += ["файл", "строка"]
         widths += [38, 8]
     _write_header(ws, 1, columns)
     for i, _ in enumerate(columns, start=1):

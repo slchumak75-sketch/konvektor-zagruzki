@@ -180,3 +180,66 @@ def test_meta_does_not_take_contract_number(known_paths):
     meta = extract_meta(read_source(str(path)))
     assert meta.doc_number == "1019250"
     assert meta.doc_date == DATE(2026, 11, 12)
+
+
+# ---------------------------------------------------------------- наша организация
+def test_our_companies_default():
+    from konvektor.meta import core_name, is_our_company, our_companies
+
+    assert "мирстроймаркет" in our_companies()
+    assert "мирсититорг" in our_companies()
+    assert is_our_company('ООО "МирСтройМаркет"')
+    assert is_our_company('МИРСТРОЙМАРКЕТ ООО')
+    assert is_our_company('Общество с ограниченной ответственностью "Мирсититорг"')
+    assert not is_our_company('ООО "ОМА"')
+    assert core_name('ООО "МирСтройМаркет"') == "мирстроймаркет"
+
+
+def test_our_companies_can_be_overridden(monkeypatch):
+    from konvektor.meta import is_our_company, our_companies
+
+    monkeypatch.setenv("KONVEKTOR_OUR_COMPANIES", "ромашка, лютик")
+    assert our_companies() == ("ромашка", "лютик")
+    assert is_our_company('ООО "Ромашка"')
+    assert not is_our_company('ООО "Мирсититорг"')
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_supplier_is_never_our_company(known_paths, name):
+    """Поставщиком не может быть наша организация (покупатель)."""
+    from konvektor.meta import is_our_company
+
+    path = next((p for p in known_paths if p.name == name), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    meta = meta_from_path(str(path))
+    assert not is_our_company(meta.supplier), f"{name}: поставщик = {meta.supplier}"
+
+
+@pytest.mark.parametrize(
+    "name, buyer",
+    [
+        ("Кореличи (4).xls", "мирсититорг"),
+        ("Счет на оплату № УТ-542 от 12.11.2026.xlsx", "мирсититорг"),
+        ("_№ 10802 от 12 ноября 2026 г .XLS", "мирстроймаркет"),
+        ("ТТН-1 (вертикальная) № 1019250 от 12.11.2026.xls", "мирстроймаркет"),
+    ],
+)
+def test_buyer_is_detected(known_paths, name, buyer):
+    path = next((p for p in known_paths if p.name == name), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    meta = meta_from_path(str(path))
+    from konvektor.meta import core_name
+
+    assert buyer in core_name(meta.buyer), meta.buyer
+
+
+def test_supplier_from_top_of_table(known_paths):
+    """Поставщик ищется в верхней части документа, а не где попало."""
+    path = next((p for p in known_paths if p.name.startswith("КХ2104033")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    meta = meta_from_path(str(path))
+    assert meta.supplier == 'ОАО "Лидское пиво"'
+    assert "мирстроймаркет" not in meta.supplier.lower()

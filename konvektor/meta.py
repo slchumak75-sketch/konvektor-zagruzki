@@ -50,15 +50,23 @@ _SUPPLIER_LABELS = (
     "продавец (поставщик)",
     "поставщик и его адрес",
 )
-#: Подписи «другой стороны» — их значения поставщиком не считаем.
-_COUNTERPARTY_LABELS = (
+#: Названия нашей организации (покупателя). Поставщиком они быть не могут,
+#: даже если стоят в самом верху документа: в счетах сверху часто печатают
+#: именно получателя/плательщика. Свой список можно задать переменной
+#: окружения KONVEKTOR_OUR_COMPANIES (через запятую).
+DEFAULT_OUR_COMPANIES = ("мирстроймаркет", "мирсититорг")
+
+#: Надёжные подписи получателя — кто получает товар, тот и покупатель.
+_BUYER_STRONG_LABELS = (
     "покупатель",
     "грузополучатель",
-    "заказчик",
-    "плательщик",
-    "получатель",
     "конечный получатель",
+    "получатель",
 )
+#: Слабые подписи: плательщиком/заказчиком перевозки бывает и поставщик.
+_BUYER_WEAK_LABELS = ("плательщик", "заказчик")
+#: Подписи «другой стороны» — их значения поставщиком не считаем.
+_COUNTERPARTY_LABELS = _BUYER_STRONG_LABELS + _BUYER_WEAK_LABELS
 #: Подписи с номером документа и датой.
 _NUMBER_LABELS = (
     "серия номер накладной",
@@ -277,6 +285,138 @@ def _after_colon(text: str) -> str:
         return ""
     tail = text.split(":", 1)[1].strip()
     return tail
+
+
+def our_companies() -> Tuple[str, ...]:
+    """Названия нашей организации: по умолчанию заказчик + переменная окружения."""
+    raw = os.environ.get("KONVEKTOR_OUR_COMPANIES", "")
+    extra = [n.strip().lower() for n in raw.split(",") if n.strip()]
+    return tuple(extra) if extra else DEFAULT_OUR_COMPANIES
+
+
+def core_name(text: str) -> str:
+    """«ООО "МирСтройМаркет"» -> «мирстроймаркет» (для сравнения названий)."""
+    t = norm_header(text)
+    for form in _LEGAL_FORMS:
+        t = t.replace(form.lower(), " ")
+    return re.sub(r"[^0-9a-zа-яё]+", "", t)
+
+
+def is_our_company(name: str) -> bool:
+    """Это наша организация (покупатель), а не поставщик."""
+    core = core_name(name)
+    if not core:
+        return False
+    return any(ours and ours in core for ours in our_companies())
+
+
+def _team_values(
+    sheets: Sequence[Sheet], labels: Sequence[str], max_rows: int = 80
+) -> List[Tuple[int, int, str]]:
+    """Значения рядом с подписями: (строка, колонка, очищенное значение)."""
+    found: List[Tuple[int, int, str]] = []
+    for sheet in sheets:
+        for r, row in enumerate(sheet.rows[:max_rows]):
+            for col, value in enumerate(row):
+                if not isinstance(value, str):
+                    continue
+                t = norm_header(value)
+                if not t or not any(t.startswith(x) for x in labels):
+                    continue
+                if any(t.startswith(x) for x in _COUNTERPARTY_LABELS) and labels is _SUPPLIER_LABELS:
+                    continue
+                for candidate in (_after_colon(value), _value_right(row, col)):
+                    cleaned = clean_supplier(candidate)
+                    if cleaned and len(cleaned) > 3 and not _RE_ONLY_DIGITS.match(cleaned):
+                        found.append((r, col, cleaned))
+                        break
+    return found
+
+
+def _supplier_and_buyer(sheets: Sequence[Sheet], max_rows: int = 80) -> Tuple[str, str]:
+    """Поставщик и покупатель (наша организация).
+
+    Правила:
+      1. значения под подписями «Поставщик», «Продавец», «Грузоотправитель»;
+      2. «между ООО «А» и ООО «Б»» — первое поставщик, второе покупатель;
+      3. название организации в верхней части листа (первые 8 строк и 6 столбцов,
+         затем до 20-й строки) — с меньшим весом;
+      4. наша организация (Мирстроймаркет / Мирсититорг / свой список) и
+         покупатель из документа поставщиком не считаются никогда.
+    """
+    # покупатель: сначала надёжные подписи, из них — наша организация, если есть
+    strong = _team_values(sheets, _BUYER_STRONG_LABELS, max_rows)
+    weak = _team_values(sheets, _BUYER_WEAK_LABELS, max_rows)
+    buyer = ""
+    for _row, _col, name in strong:
+        if is_our_company(name):
+            buyer = name
+            break
+    if not buyer and strong:
+        buyer = strong[0][2]
+    if not buyer:
+        for _row, _col, name in weak:
+            if is_our_company(name):
+                buyer = name
+                break
+    if not buyer and weak:
+        buyer = weak[0][2]
+    buyer_core = core_name(buyer)
+
+    strong_cores = {core_name(n) for _r, _c, n in strong if len(n) > 3}
+
+    def allowed(name: str) -> bool:
+        if not name or len(name) < 4:
+            return False
+        if is_our_company(name):
+            return False
+        core = core_name(name)
+        if not core:
+            return False
+        if buyer_core and (core in buyer_core or buyer_core in core):
+            return False
+        # получатель по надёжной подписи поставщиком не бывает
+        if any(core in sc or sc in core for sc in strong_cores if sc):
+            return False
+        return True
+
+    candidates: List[Tuple[float, str]] = []
+
+    # помеченные подписи поставщика — самый надёжный источник
+    for row, _col, name in _team_values(sheets, _SUPPLIER_LABELS, max_rows):
+        candidates.append((100.0 - row, name))
+
+    # «между А и Б»
+    for sheet in sheets:
+        for value in sheet.rows[:max_rows]:
+            for cell in value:
+                if not isinstance(cell, str):
+                    continue
+                m = _RE_BETWEEN.search(cell)
+                if m:
+                    cand = clean_supplier(m.group(1))
+                    if looks_like_company(cand) and allowed(cand):
+                        candidates.append((90.0, cand))
+                    other = clean_supplier(m.group(2))
+                    if not buyer and looks_like_company(other):
+                        buyer, buyer_core = other, core_name(other)
+
+    # название организации в верхней части листа
+    for sheet in sheets:
+        for r, row in enumerate(sheet.rows[:20]):
+            for cell in row[:6]:
+                if not isinstance(cell, str) or _is_label(cell):
+                    continue
+                if not looks_like_company(cell):
+                    continue
+                name = clean_supplier(cell)
+                if len(name) > 4:
+                    candidates.append(((60.0 - 2 * r) if r < 8 else (40.0 - r), name))
+
+    for _score, name in sorted(candidates, key=lambda c: -c[0]):
+        if allowed(name):
+            return name, buyer
+    return "", buyer
 
 
 def _supplier_from_sheets(sheets: Sequence[Sheet], max_rows: int = 80) -> str:
@@ -515,7 +655,7 @@ def extract_meta(source: SourceFile) -> DocMeta:
                     if text:
                         texts.append(text)
 
-    meta.supplier = _supplier_from_sheets(sheets)
+    meta.supplier, meta.buyer = _supplier_and_buyer(sheets)
     for text in texts:
         m = _RE_UNP.search(text)
         if m:
@@ -558,7 +698,13 @@ def extract_meta(source: SourceFile) -> DocMeta:
     meta.origin = "документ" if from_doc else ("имя файла" if (number or date or doc_type) else "")
 
     if not meta.supplier:
-        meta.warnings.append("поставщик не найден в документе")
+        if meta.buyer and is_our_company(meta.buyer):
+            meta.warnings.append(
+                "поставщик не найден: в документе указана только наша организация "
+                f"({meta.buyer})"
+            )
+        else:
+            meta.warnings.append("поставщик не найден в документе")
     if meta.doc_date is None:
         meta.warnings.append("дата документа не найдена")
     return meta

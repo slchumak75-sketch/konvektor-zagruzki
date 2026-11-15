@@ -15,7 +15,6 @@ from .pipeline import (
     MODE_SHEETS,
     ConvertOptions,
     convert,
-    default_output_name,
     diagnose,
     explain,
     is_supported,
@@ -51,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--recursive", action="store_true", help="обходить вложенные папки")
     p.add_argument("-q", "--quiet", action="store_true", help="не печатать прогресс")
     p.add_argument("--json", action="store_true", help="напечатать итог в JSON")
+    p.add_argument(
+        "--source-columns",
+        action="store_true",
+        help="добавить в таблицу колонки «файл» и «строка» (в окне они добавляются всегда)",
+    )
     p.add_argument("--strict", action="store_true", help="вернуть код 3, если найдены расхождения в суммах")
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
@@ -111,12 +115,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif not os.path.exists(f):
             print(f"пропущен (файл не найден): {f}", file=sys.stderr)
 
-    out = args.output
-    if not out:
-        first = next((f for f in files if os.path.isfile(f)), "")
-        out = default_output_name(os.path.dirname(os.path.abspath(first)) if first else os.getcwd())
-
-    options = ConvertOptions(mode=args.mode, validate=not args.no_validate)
+    out = args.output or ""
+    options = ConvertOptions(
+        mode=args.mode,
+        validate=not args.no_validate,
+        # без -o результат раскладывается как «поставщик/дата.xlsx»
+        naming="path" if out else "auto",
+        add_source_columns=args.source_columns,
+    )
     result = convert(files, out, options, log=log, recursive=args.recursive)
 
     if args.json:

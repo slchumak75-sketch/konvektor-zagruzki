@@ -1,11 +1,18 @@
 """Оконное приложение для Windows (tkinter — входит в стандартный Python).
 
-Логики здесь минимум: всё, что можно посчитать, живёт в pipeline.py.  GUI
-только собирает файлы, запускает конвертацию в отдельном потоке и показывает
-журнал.  Благодаря этому интерфейс не мешает тестировать конвертер.
+Логики здесь минимум: всё, что можно посчитать, живёт в pipeline.py. GUI
+только принимает **один** файл, запускает конвертацию в отдельном потоке и
+показывает в нижней части окна саму полученную таблицу (как в Excel).
 
-Файлы можно не только выбирать кнопками, но и перетащить на ярлык
-Konvektor.exe — Windows передаст их в командной строке (см. app_gui.py).
+Особенности, заданные заказчиком:
+  * файл обрабатывается по одному; после конвертации список очищается сам;
+  * файл результата сохраняется как «поставщик / дата документа.xlsx»
+    (папка поставщика создаётся автоматически);
+  * в таблицу всегда добавляются колонки «файл» и «строка»;
+  * журнала нет — вместо него предпросмотр готовой таблицы.
+
+Файл можно не только выбрать кнопкой, но и перетащить на ярлык
+Konvektor.exe — Windows передаст его в командной строке (см. app_gui.py).
 """
 
 from __future__ import annotations
@@ -17,16 +24,13 @@ import threading
 import traceback
 from typing import List, Optional
 
-from . import APP_NAME, __version__
+from . import APP_NAME, TEMPLATE_COLUMNS, __version__
+from .extract import Item
 from .pipeline import (
     MODE_COMBINED,
-    MODE_FILES,
-    MODE_SHEETS,
-    MODE_TITLES,
     ConvertOptions,
     ConvertResult,
     convert,
-    default_output_name,
     is_supported,
 )
 
@@ -66,6 +70,13 @@ FILE_TYPES = [
     ("Все файлы", "*.*"),
 ]
 
+#: Колонки предпросмотра: шаблон + источник строки.
+PREVIEW_COLUMNS = list(TEMPLATE_COLUMNS) + ["файл", "строка"]
+PREVIEW_WIDTHS = [16, 12, 46, 8, 10, 11, 12, 9, 12, 12, 26, 7]
+
+#: Сколько строк показывать в предпросмотре (остальные — в файле).
+PREVIEW_LIMIT = 500
+
 
 class KonvektorApp(_Base):
     """Главное окно."""
@@ -73,14 +84,15 @@ class KonvektorApp(_Base):
     def __init__(self, initial_files: Optional[List[str]] = None):
         super().__init__()
         self.title(f"{APP_NAME} {__version__}")
-        self.geometry("980x680")
-        self.minsize(820, 560)
+        self.geometry("1100x720")
+        self.minsize(900, 600)
 
         self.files: List[str] = []
         self._queue: "queue.Queue[tuple]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._running = False
         self._last_outputs: List[str] = []
+        self.log_lines: List[str] = []
 
         self._set_window_icon()
         self._build_ui()
@@ -108,126 +120,96 @@ class KonvektorApp(_Base):
                 continue
 
     def _build_ui(self) -> None:
-        # --- список файлов
-        top = ttk.LabelFrame(self, text="1. Файлы для конвертации")
-        top.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        # --- 1. один файл
+        top = ttk.LabelFrame(self, text="1. Файл для конвертации (по одному)")
+        top.pack(fill="x", padx=10, pady=(10, 4))
 
         ttk.Label(
             top,
             text="Поддерживаются .xls, .xlsx, .csv, .txt, .html. "
-            "Файлы можно перетащить мышью на ярлык Konvektor.exe.",
+            "Файл можно перетащить мышью на ярлык Konvektor.exe.",
             foreground="#555555",
         ).pack(side="bottom", anchor="w", padx=8, pady=(0, 6))
 
-        list_wrap = ttk.Frame(top)
-        list_wrap.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        self.listbox = tk.Listbox(list_wrap, selectmode="extended", height=8, activestyle="dotbox")
-        scroll = ttk.Scrollbar(list_wrap, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscrollcommand=scroll.set)
-        self.listbox.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        self.file_var = tk.StringVar(value="файл не выбран")
+        ttk.Label(top, textvariable=self.file_var, anchor="w").pack(
+            side="left", fill="x", expand=True, padx=8, pady=8
+        )
 
-        btns = ttk.Frame(top)
-        btns.pack(side="right", fill="y", padx=8, pady=8)
-        ttk.Button(btns, text="Добавить файлы…", command=self.on_add_files).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Добавить папку…", command=self.on_add_folder).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Убрать выбранные", command=self.on_remove).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Очистить список", command=self.on_clear).pack(fill="x", pady=2)
+        ttk.Button(top, text="Выбрать файл…", command=self.on_add_files).pack(
+            side="right", padx=8, pady=8
+        )
 
-        # --- настройки
-        mid = ttk.LabelFrame(self, text="2. Куда и как сохранить")
+        # --- 2. куда сохранить
+        mid = ttk.LabelFrame(self, text="2. Куда сохранить")
         mid.pack(fill="x", padx=10, pady=4)
 
         row1 = ttk.Frame(mid)
         row1.pack(fill="x", padx=8, pady=(8, 2))
         ttk.Label(row1, text="Итоговый файл:").pack(side="left")
         self.out_var = tk.StringVar(value="")
-        ttk.Entry(row1, textvariable=self.out_var).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Entry(row1, textvariable=self.out_var).pack(
+            side="left", fill="x", expand=True, padx=6
+        )
         ttk.Button(row1, text="Обзор…", command=self.on_browse_output).pack(side="left")
 
-        row2 = ttk.Frame(mid)
-        row2.pack(fill="x", padx=8, pady=(2, 8))
-        ttk.Label(row2, text="Режим:").pack(side="left")
-        self.mode_var = tk.StringVar(value=MODE_COMBINED)
-        self.mode_box = ttk.Combobox(
-            row2,
-            textvariable=self.mode_var,
-            state="readonly",
-            values=[MODE_TITLES[k] for k in (MODE_COMBINED, MODE_SHEETS, MODE_FILES)],
-            width=46,
-        )
-        self.mode_box.current(0)
-        self.mode_box.pack(side="left", padx=6)
-
-        self.add_source_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            row2,
-            text="добавить колонки «файл» и «строка»",
-            variable=self.add_source_var,
-        ).pack(side="left", padx=10)
-
-        self.open_after_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(row2, text="открыть результат", variable=self.open_after_var).pack(side="left", padx=6)
+        ttk.Label(
+            mid,
+            text="Пусто — сохранить рядом с исходным файлом как "
+            "«поставщик / дата документа.xlsx».",
+            foreground="#555555",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
         # --- действие
         act = ttk.Frame(self)
         act.pack(fill="x", padx=10, pady=4)
         self.run_btn = ttk.Button(act, text="Конвертировать", command=self.on_convert)
         self.run_btn.pack(side="left")
-        self.progress = ttk.Progressbar(act, mode="indeterminate", length=260)
+        self.progress = ttk.Progressbar(act, mode="indeterminate", length=240)
         self.progress.pack(side="left", padx=12)
         self.status = ttk.Label(act, text="Готов к работе")
         self.status.pack(side="left", padx=6)
 
-        # --- журнал
-        bottom = ttk.LabelFrame(self, text="3. Журнал")
+        # --- 3. предпросмотр результата вместо журнала
+        bottom = ttk.LabelFrame(self, text="3. Результат (таблица)")
         bottom.pack(fill="both", expand=True, padx=10, pady=(4, 10))
-        log_wrap = ttk.Frame(bottom)
-        log_wrap.pack(fill="both", expand=True, padx=8, pady=8)
-        self.log_text = tk.Text(log_wrap, height=12, wrap="word", state="disabled")
-        log_scroll = ttk.Scrollbar(log_wrap, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.pack(side="left", fill="both", expand=True)
-        log_scroll.pack(side="right", fill="y")
+
+        table_wrap = ttk.Frame(bottom)
+        table_wrap.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.preview = ttk.Treeview(
+            table_wrap, columns=PREVIEW_COLUMNS, show="headings", height=12
+        )
+        for title, width in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS):
+            self.preview.heading(title, text=title)
+            self.preview.column(title, width=width, anchor="w", stretch=False)
+
+        yscroll = ttk.Scrollbar(table_wrap, orient="vertical", command=self.preview.yview)
+        xscroll = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.preview.xview)
+        self.preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        yscroll.pack(side="right", fill="y")
+        xscroll.pack(side="bottom", fill="x")
+        self.preview.pack(side="left", fill="both", expand=True)
+
+        self.hint_var = tk.StringVar(value="")
+        ttk.Label(bottom, textvariable=self.hint_var, foreground="#555555").pack(
+            anchor="w", padx=8, pady=(0, 6)
+        )
 
     # ------------------------------------------------------------- действия
     def on_add_files(self) -> None:
-        paths = filedialog.askopenfilenames(title="Выберите файлы", filetypes=FILE_TYPES)
-        if paths:
-            self._add_files(list(paths))
-
-    def on_add_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Выберите папку с файлами")
-        if not folder:
-            return
-        found = []
-        for name in sorted(os.listdir(folder)):
-            full = os.path.join(folder, name)
-            if os.path.isfile(full) and is_supported(full):
-                found.append(full)
-        if not found:
-            messagebox.showinfo(APP_NAME, "В папке нет поддерживаемых файлов.")
-            return
-        self._add_files(found)
-
-    def on_remove(self) -> None:
-        for idx in sorted(self.listbox.curselection(), reverse=True):
-            self.listbox.delete(idx)
-            del self.files[idx]
-        self._update_status()
-
-    def on_clear(self) -> None:
-        self.listbox.delete(0, "end")
-        self.files.clear()
-        self._update_status()
+        path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
+        if path:
+            self._add_files([path])
 
     def on_browse_output(self) -> None:
-        initial = self.out_var.get() or default_output_name(os.getcwd())
+        initial = self.out_var.get()
+        folder = os.path.dirname(initial) or os.path.dirname(self.files[0] if self.files else "") or os.getcwd()
         path = filedialog.asksaveasfilename(
             title="Куда сохранить результат",
             defaultextension=".xlsx",
-            initialfile=os.path.basename(initial),
-            initialdir=os.path.dirname(initial) or os.getcwd(),
+            initialfile=os.path.basename(initial) or "Результат.xlsx",
+            initialdir=folder,
             filetypes=[("Excel (*.xlsx)", "*.xlsx")],
         )
         if path:
@@ -238,40 +220,32 @@ class KonvektorApp(_Base):
         if self._running:
             return
         if not self.files:
-            messagebox.showwarning(APP_NAME, "Сначала добавьте файлы.")
+            messagebox.showwarning(APP_NAME, "Сначала выберите файл.")
             return
 
+        path = self.files[0]
         out = self.out_var.get().strip()
-        if not out:
-            out = default_output_name(os.path.dirname(self.files[0]) or os.getcwd())
-            self.out_var.set(out)
-
-        mode = {
-            MODE_TITLES[MODE_COMBINED]: MODE_COMBINED,
-            MODE_TITLES[MODE_SHEETS]: MODE_SHEETS,
-            MODE_TITLES[MODE_FILES]: MODE_FILES,
-        }.get(self.mode_var.get(), MODE_COMBINED)
-
-        options = ConvertOptions(mode=mode, add_source_columns=self.add_source_var.get())
-        files = list(self.files)
+        options = ConvertOptions(
+            mode=MODE_COMBINED,
+            # колонки «файл» и «строка» нужны всегда
+            add_source_columns=True,
+            # без явного пути — «поставщик/дата.xlsx»
+            naming="path" if out else "auto",
+        )
 
         self._running = True
         self.run_btn.configure(state="disabled")
         self.progress.start(12)
         self.status.configure(text="Конвертирую…")
+        self.hint_var.set("")
         self._log_clear()
+        self._clear_preview()
         self._log(f"{APP_NAME} {__version__}")
-        self._log(f"Файлов: {len(files)}; режим: {MODE_TITLES[mode]}")
-        self._log("")
+        self._log(f"файл: {os.path.basename(path)}")
 
         def worker() -> None:
             try:
-                result = convert(
-                    files,
-                    out,
-                    options,
-                    log=lambda m: self._queue.put(("log", m)),
-                )
+                result = convert([path], out, options, log=lambda m: self._queue.put(("log", m)))
                 self._queue.put(("done", result))
             except Exception as exc:  # noqa: BLE001 - показываем пользователю
                 self._queue.put(("error", (exc, traceback.format_exc())))
@@ -299,13 +273,7 @@ class KonvektorApp(_Base):
         self.run_btn.configure(state="normal")
         self._last_outputs = list(result.outputs)
 
-        self._log("")
-        for path, meta in result.metas.items():
-            self._log(f"Документ: {os.path.basename(path)}")
-            self._log(f"  поставщик: {meta.supplier or '— не найден'}"
-                      + (f" (УНП {meta.supplier_unp})" if meta.supplier_unp else ""))
-            self._log(f"  документ: {meta.doc_label or '— не определён'}"
-                      + (f", дата: {meta.date_text}" if meta.doc_date else ", дата не найдена"))
+        self._show_preview(result.items)
         self._log("")
         self._log(
             f"Позиций: {result.items_count}; ошибок: {result.error_count}; "
@@ -319,48 +287,48 @@ class KonvektorApp(_Base):
                     f"  ПРОВЕРИТЬ: {os.path.basename(path)} — доверие {report.confidence:.2f}"
                     f" ({report.quality}); " + "; ".join(report.reasons[:3])
                 )
-        for issue in (result.report.errors if result.report else [])[:20]:
-            self._log(
-                f"  РАСХОЖДЕНИЕ: {os.path.basename(issue.source)} стр.{issue.row}: {issue.message}"
-            )
         for path in result.outputs:
             self._log(f"Сохранено: {path}")
+
         self.status.configure(text=f"Готово: {result.items_count} позиций")
 
+        docs = "; ".join(
+            (m.supplier or "поставщик не найден")
+            + (f", {m.doc_label}" if m.doc_number else "")
+            + (f" от {m.date_text}" if m.doc_date else "")
+            for m in result.metas.values()
+        )
+        if result.outputs:
+            folder, name = os.path.split(result.outputs[0])
+            self.hint_var.set(f"Сохранено: {docs} → {os.path.basename(folder)}/{name}")
+        elif docs:
+            self.hint_var.set(docs)
+
         if result.items_count:
-            docs = "\n".join(
-                f"  {os.path.basename(p)}: {m.supplier or 'поставщик не найден'}"
-                + (f", {m.doc_label}" if m.doc_number else "")
-                + (f" от {m.date_text}" if m.doc_date else "")
-                + (
-                    f" — требует проверки ({result.analysis[p].confidence:.2f})"
-                    if p in result.analysis and result.analysis[p].needs_review
-                    else ""
-                )
-                for p, m in result.metas.items()
-            )
             text = (
                 f"Готово.\n\nПозиций: {result.items_count}\n"
-                + (f"Документы:\n{docs}\n\n" if docs else "")
-                + f"Расхождений в суммах: {result.error_count}\n"
+                f"Документ: {docs}\n"
+                f"Расхождений в суммах: {result.error_count}\n"
                 f"Предупреждений: {result.warning_count}\n"
                 f"Значений рассчитано программой: {result.computed_count}\n\n"
                 + "\n".join(result.outputs)
             )
+            if result.errors:
+                text += "\n\nОшибки: " + "; ".join(result.errors)
             if result.error_count:
                 messagebox.showwarning(APP_NAME, text + "\n\nПодробности — на листе «Проверки».")
             else:
                 messagebox.showinfo(APP_NAME, text)
-            if self.open_after_var.get() and result.outputs:
-                self._open(result.outputs[0])
         else:
             messagebox.showwarning(
                 APP_NAME,
                 "Не удалось найти ни одной позиции.\n\n"
-                "Проверьте, что в файлах есть таблица с колонками "
-                "«наименование», «количество», «цена» и т.п.\n"
-                "Подробности — в журнале.",
+                "Проверьте, что в файле есть таблица с колонками "
+                "«наименование», «количество», «цена» и т.п.",
             )
+
+        # файл обработан — список очищается сам
+        self._clear_files()
 
     def _fail(self, exc: Exception, tb: str) -> None:
         self._running = False
@@ -370,55 +338,80 @@ class KonvektorApp(_Base):
         self._log("ОШИБКА: " + str(exc))
         self._log(tb)
         messagebox.showerror(APP_NAME, f"Произошла ошибка:\n{exc}")
+        self._clear_files()
 
     # --------------------------------------------------------------- утилиты
+    def _show_preview(self, items: List[Item], limit: int = PREVIEW_LIMIT) -> None:
+        """Показать полученную таблицу так, как она попадёт в Excel."""
+        self._clear_preview()
+        for item in items[:limit]:
+            values = [
+                item.barcode or "",
+                item.article or "",
+                item.name,
+                item.unit or "",
+                item.qty,
+                item.price,
+                item.total_sum,
+                item.vat_rate,
+                item.vat_sum,
+                item.sum_with_vat,
+                os.path.basename(item.source),
+                item.row,
+            ]
+            self.preview.insert("", "end", values=[self._fmt(v) for v in values])
+        if not items:
+            self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
+
+    @staticmethod
+    def _fmt(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.2f}".replace(".", ",")
+        return str(value)
+
+    def _clear_preview(self) -> None:
+        for child in self.preview.get_children():
+            self.preview.delete(child)
+
     def _add_files(self, paths: List[str]) -> None:
-        added = 0
+        """Один файл за раз: новый выбор заменяет предыдущий."""
         for path in paths:
             full = os.path.abspath(path)
-            if full in self.files:
-                continue
             if not is_supported(full):
                 self._log(f"пропущен (неподдерживаемый формат): {full}")
                 continue
-            self.files.append(full)
-            self.listbox.insert("end", os.path.basename(full))
-            added += 1
-        if added:
-            if not self.out_var.get():
-                folder = os.path.dirname(self.files[0])
-                self.out_var.set(default_output_name(folder))
-            self._log(f"добавлено файлов: {added}")
+            self.files = [full]
+            self.file_var.set(os.path.basename(full))
+            self.out_var.set("")
+            self.hint_var.set("")
+            self._log(f"выбран файл: {full}")
+            break
+        self._update_status()
+
+    def _clear_files(self) -> None:
+        self.files.clear()
+        self.file_var.set("файл не выбран")
+        self.out_var.set("")
         self._update_status()
 
     def _update_status(self) -> None:
-        self.status.configure(text=f"Файлов в списке: {len(self.files)}")
+        if self._running:
+            return
+        self.status.configure(
+            text="Готов к работе" if not self.files else "Файл выбран — нажмите «Конвертировать»"
+        )
 
     def _log(self, message: str) -> None:
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", message + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
+        self.log_lines.append(message)
 
     def _log_clear(self) -> None:
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
-
-    def _open(self, path: str) -> None:
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                os.system(f'open "{path}"')
-            else:
-                os.system(f'xdg-open "{path}" >/dev/null 2>&1 &')
-        except Exception:  # noqa: BLE001 - открыть файл не критично
-            pass
+        self.log_lines.clear()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Запуск GUI. Аргументы командной строки = файлы для добавления в список."""
+    """Запуск GUI. Аргументы командной строки = файл для конвертации."""
     if not TK_AVAILABLE:
         print(
             "Оконный интерфейс недоступен: не найден tkinter.\n"

@@ -147,7 +147,7 @@ def test_source_columns(known_paths, tmp_path):
     ws = load_workbook(str(out))["Данные"]
     header = [c.value for c in ws[1]]
     assert header[:10] == TEMPLATE_COLUMNS
-    assert header[10:] == ["файл-источник", "строка"]
+    assert header[10:] == ["файл", "строка"]
     assert ws.cell(row=2, column=11).value.endswith(".xls")
 
 
@@ -229,3 +229,48 @@ def test_analysis_is_built_for_every_file(combined):
         assert report.items > 0
         assert report.blocks
         assert 0.0 <= report.confidence <= 1.0
+
+
+# ---------------------------------------------------------- имя результата
+def test_output_path_for():
+    import datetime as dt
+
+    from konvektor.meta import DocMeta
+    from konvektor.pipeline import output_path_for, safe_path_part
+
+    meta = DocMeta(
+        supplier='ООО "Культбытхозторгплюс"', doc_date=dt.date(2026, 11, 12)
+    )
+    assert safe_path_part('ООО "Культбытхозторгплюс"') == "ООО Культбытхозторгплюс"
+    assert safe_path_part("ООО «ОМА»") == "ООО ОМА"
+    assert safe_path_part('a/b:c*?"<>|') == "a b c"
+
+    path = output_path_for(meta, "/tmp/база")
+    assert path == os.path.join("/tmp/база", "ООО Культбытхозторгплюс", "12.11.2026.xlsx")
+    # нет реквизитов — понятные имена, а не «None.xlsx»
+    fallback = output_path_for(DocMeta(), "/tmp/база")
+    assert fallback.endswith("Поставщик не определён/Дата не найдена.xlsx")
+
+
+def test_auto_naming_writes_supplier_folder(known_paths, tmp_path):
+    """Режим naming="auto": результат ложится в папку поставщика с именем даты."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    result = convert(
+        [str(path)],
+        "",
+        ConvertOptions(naming="auto", add_source_columns=True),
+    )
+    assert result.outputs, result.notes
+    written = result.outputs[0]
+    folder, name = os.path.split(written)
+    assert name == "19.10.2026.xlsx", written
+    assert os.path.basename(folder) == "ООО ОМА", written
+    assert os.path.exists(written)
+    # убираем за собой, чтобы не мусорить в репозитории
+    os.remove(written)
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass

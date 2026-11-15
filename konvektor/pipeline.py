@@ -16,6 +16,35 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from .analysis import AnalysisReport, build_report, format_report
 from .extract import Item, extract_file
 from .meta import DocMeta, extract_meta, fmt_date
+
+#: Символы, недопустимые в именах файлов Windows.
+_ILLEGAL_IN_NAME = '<>:"/\\|?*'
+
+
+def safe_path_part(name: str, limit: int = 80) -> str:
+    """Привести название к виду, допустимому в имени папки/файла Windows.
+
+    «ООО "Культбытхозторгплюс"» -> «ООО Культбытхозторгплюс».
+    """
+    text = (name or "").replace("«", " ").replace("»", " ").replace('"', " ")
+    for ch in _ILLEGAL_IN_NAME:
+        text = text.replace(ch, " ")
+    text = " ".join(text.split())
+    text = text.strip(" .")
+    if len(text) > limit:
+        text = text[:limit].rstrip(" .")
+    return text
+
+
+def output_path_for(meta: Optional[DocMeta], base_dir: str) -> str:
+    """Куда сложить результат: <папка>/<поставщик>/<дата документа>.xlsx.
+
+    Именно так просил заказчик: «наименование поставщика / дата». Если
+    поставщик или дата не найдены — понятные имена по умолчанию.
+    """
+    supplier = safe_path_part(meta.supplier if meta else "") or "Поставщик не определён"
+    date = safe_path_part(fmt_date(meta.doc_date) if meta else "") or "Дата не найдена"
+    return os.path.join(base_dir, supplier, f"{date}.xlsx")
 from .readers import read_source
 from .validate import ValidationReport, check_document_totals, validate_items
 from .writer import FileStat, WorkbookPayload, write_workbook
@@ -54,8 +83,10 @@ class ConvertOptions:
     mode: str = MODE_COMBINED
     validate: bool = True
     keep_warnings: bool = True
-    #: добавить в итоговую таблицу колонки «файл-источник» и «строка»
+    #: добавить в итоговую таблицу колонки «файл» и «строка»
     add_source_columns: bool = False
+    #: "auto" — имя по поставщику и дате (поставщик/дата.xlsx), "path" — как указано
+    naming: str = "path"
 
 
 @dataclass
@@ -265,6 +296,18 @@ def convert(
         stats.append(st)
     result.stats = stats
 
+    # ---- куда писать -----------------------------------------------------
+    if options.naming == "auto":
+        base_dir = os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
+        if len(per_file_items) == 1:
+            out_path = output_path_for(metas.get(per_file_items[0][0]), base_dir)
+        elif not out_path:
+            out_path = default_output_name(base_dir)
+        log(f"  имя результата: {os.path.relpath(out_path, base_dir)}")
+    elif not out_path:
+        base_dir = os.path.dirname(os.path.abspath(files[0])) or os.getcwd()
+        out_path = default_output_name(base_dir)
+
     # ---- запись ----------------------------------------------------------
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
 
@@ -274,7 +317,10 @@ def convert(
         for path, items in per_file_items:
             if not items:
                 continue
-            name = _unique_path(base_dir, stem, path)
+            if options.naming == "auto":
+                name = output_path_for(metas.get(path), base_dir)
+            else:
+                name = _unique_path(base_dir, stem, path)
             payload = WorkbookPayload(
                 data_sheets=[("Данные", items)],
                 report=report,
