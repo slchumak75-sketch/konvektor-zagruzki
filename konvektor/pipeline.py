@@ -278,8 +278,9 @@ def selftest(directory: str = ".", log: Logger = _noop) -> Tuple[bool, str]:
             return False, "позиции не найдены"
         if not os.path.exists(out):
             return False, "файл результата не создан"
+        used = len(res.stats)
         msg = (
-            f"файлов {len(files)}, позиций {res.items_count}, "
+            f"файлов с данными {used} из {len(files)}, позиций {res.items_count}, "
             f"ошибок {res.error_count}, предупреждений {res.warning_count}, "
             f"рассчитано {res.computed_count}"
         )
