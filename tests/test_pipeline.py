@@ -378,3 +378,15 @@ def test_downloads_dir_exists():
     from konvektor.pipeline import downloads_dir
 
     assert os.path.isdir(downloads_dir())
+
+
+def test_vat_rate_fraction_becomes_percent():
+    """Ставка НДС, записанная долей (0.2), превращается в 20 — без «0,2» в таблице."""
+    from konvektor.extract import Item
+    from konvektor.validate import validate_items
+
+    item = Item(
+        source="файл.xls", sheet="Лист1", row=5, name="Товар", qty=2.0, price=10.0, vat_rate=0.2
+    )
+    validate_items([item])
+    assert item.vat_rate == 20.0

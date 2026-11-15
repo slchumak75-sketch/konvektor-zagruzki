@@ -203,6 +203,19 @@ def _fill(item: Item, mode: str, issues: List[Issue]) -> None:
                 note("ставка НДС", item.vat_rate)
 
 
+def _normalize_vat_rate(item: Item) -> None:
+    """Ставка НДС всегда в процентах: 0.2 -> 20.
+
+    В части выгрузок ставка лежит долей (0.2), и в таблице появлялось «0,2»
+    вместо «20». Значения 0 < ставка < 1 переводим в проценты.
+    """
+    rate = item.vat_rate
+    if rate is None or isinstance(rate, bool):
+        return
+    if 0 < rate < 1:
+        item.vat_rate = round(float(rate) * 100.0, 2)
+
+
 def validate_items(items: List[Item]) -> ValidationReport:
     """Проверить и достроить позиции. Меняет items «на месте»."""
     report = ValidationReport(items=list(items))
@@ -215,6 +228,7 @@ def validate_items(items: List[Item]) -> ValidationReport:
         report.vat_mode[src] = detect_vat_mode(group)
 
     for it in items:
+        _normalize_vat_rate(it)
         mode = report.vat_mode.get(it.source, EXCLUSIVE)
         _fill(it, mode, report.issues)
         _check_item(it, mode, report.issues)

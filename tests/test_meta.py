@@ -37,7 +37,12 @@ EXPECTED = {
     "ИТ0685355.xlsx": ("", "№ ИТ0685355", "29.10.2026"),
     "КХ2104033 (1).xls": ('ОАО "Лидское пиво"', "Накладная № КХ2104033", "21.10.2026"),
     "Кореличи (4).xls": ('ООО "ОМА"', "Счет № 11121-000020449", "19.10.2026"),
-    "Счет СЧЦБ-17059130.xlsx": ("", "Счет № 17059130", ""),
+    # реквизиты нарисованы текстовым полем поверх листа (выгрузка 1С)
+    "Счет СЧЦБ-17059130.xlsx": (
+        'ООО "ТД Комплект"',
+        "Счет № СЧЦБ-17059130",
+        "10.11.2026",
+    ),
     "Счет на оплату № УТ-542 от 12.11.2026.xlsx": (
         "ООО «Торговый дом «Залог успеха»",
         "Счет № 542",
@@ -161,13 +166,50 @@ def test_sample_meta(known_paths, name, expected):
     assert meta.date_text == date_text
 
 
-def test_meta_warns_when_nothing_found(known_paths):
-    path = next((p for p in known_paths if p.name == "Счет СЧЦБ-17059130.xlsx"), None)
-    if path is None:
-        pytest.skip("нет файла-образца")
+def test_meta_warns_when_nothing_found(tmp_path):
+    """Таблица без реквизитов: поставщик и дата честно не найдены."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Наименование", "Кол-во", "Цена", "Сумма"])
+    ws.append(["Гвоздь строительный", 2, 1.5, 3])
+    path = tmp_path / "таблица_без_реквизитов.xlsx"
+    wb.save(str(path))
     meta = extract_meta(read_source(str(path)))
     assert "поставщик не найден в документе" in meta.warnings
     assert "дата документа не найдена" in meta.warnings
+
+
+def test_supplier_from_text_boxes(known_paths):
+    """Реквизиты из текстового поля поверх листа («ПОСТАВЩИК: ООО … УНП …»)."""
+    path = next((p for p in known_paths if p.name == "Счет СЧЦБ-17059130.xlsx"), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    source = read_source(str(path))
+    assert any("ПОСТАВЩИК" in t for t in source.texts), source.texts[:5]
+    meta = extract_meta(source)
+    assert meta.supplier == 'ООО "ТД Комплект"'
+    assert meta.supplier_unp == "192775574"
+    assert meta.doc_number == "СЧЦБ-17059130"
+    assert meta.date_text == "10.11.2026"
+
+
+def test_supplier_from_texts_rules():
+    """Общие правила для надписей: свои организации и покупатель — не поставщик."""
+    from konvektor.meta import _supplier_from_texts
+
+    texts = [
+        "ПОКУПАТЕЛЬ: ООО «Мирсититорг» УНП 590208176",
+        'ПОСТАВЩИК: ООО "ТД Комплект" УНП 192775574 Время работы: 9.00-18.00',
+    ]
+    supplier, buyer, unp = _supplier_from_texts(texts)
+    assert supplier == 'ООО "ТД Комплект"'
+    assert unp == "192775574"
+    assert buyer == "ООО «Мирсититорг»"
+    # если поставщик назван нашей организацией — это не поставщик
+    supplier, _, _ = _supplier_from_texts(["Поставщик: ООО «Мирстроймаркет» УНП 100000000"])
+    assert supplier == ""
 
 
 def test_meta_does_not_take_contract_number(known_paths):

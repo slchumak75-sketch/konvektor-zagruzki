@@ -56,6 +56,9 @@ class SourceFile:
     sheets: List[Sheet] = field(default_factory=list)
     reader: str = ""
     warnings: List[str] = field(default_factory=list)
+    #: Надписи из текстовых полей/рисунков (в xlsx реквизиты часто нарисованы
+    #: поверх листа и в ячейках их нет: «ПОСТАВЩИК: ООО "ТД Комплект" УНП …»).
+    texts: List[str] = field(default_factory=list)
 
 
 MAGIC_OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -113,6 +116,37 @@ def _read_xlsx(data: bytes) -> List[Sheet]:
     finally:
         wb.close()
     return sheets
+
+
+def xlsx_drawing_texts(data: bytes) -> List[str]:
+    """Тексты из текстовых полей и фигур xlsx (по одному абзацу на строку).
+
+    Реквизиты в счетах, выгруженных из 1С, нередко лежат не в ячейках,
+    а в текстовом поле поверх листа — без этого поставщик «не находится».
+    """
+    import xml.etree.ElementTree as ET
+
+    texts: List[str] = []
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:  # noqa: BLE001 - не zip или битый файл
+        return texts
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    try:
+        names = [n for n in zf.namelist() if re.match(r"xl/drawings/.*\.xml$", n)]
+        for name in names:
+            try:
+                root = ET.fromstring(zf.read(name))
+            except Exception:  # noqa: BLE001 - битый рисунок не мешает чтению
+                continue
+            for paragraph in root.iter(ns + "p"):
+                parts = [node.text or "" for node in paragraph.iter(ns + "t")]
+                line = re.sub(r"\s+", " ", "".join(parts)).strip()
+                if line:
+                    texts.append(line)
+    finally:
+        zf.close()
+    return texts
 
 
 def _norm_cell(v: Any) -> Any:
@@ -395,6 +429,9 @@ def read_source(path: str) -> SourceFile:
         if sheets:
             sf.sheets = sheets
             sf.reader = name
+            if name == "xlsx":
+                # реквизиты могут быть нарисованы текстовым полем поверх листа
+                sf.texts = xlsx_drawing_texts(data)
             return sf
         errors.append(f"{name}: пустой результат")
 

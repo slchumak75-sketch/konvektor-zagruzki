@@ -419,6 +419,47 @@ def _supplier_and_buyer(sheets: Sequence[Sheet], max_rows: int = 80) -> Tuple[st
     return "", buyer
 
 
+def _label_inline(text: str, labels: Sequence[str]) -> str:
+    """Значение сразу после подписи: «ПОСТАВЩИК: ООО …» -> «ООО …»."""
+    low = norm_header(text)
+    for label in labels:
+        if not low.startswith(label):
+            continue
+        rest = text[len(label) :].lstrip(" .:-\t")
+        if rest.startswith(":"):
+            rest = rest.lstrip(":\t ")
+        return rest.strip()
+    return ""
+
+
+def _supplier_from_texts(texts: Sequence[str]) -> Tuple[str, str, str]:
+    """Поставщик, наш покупатель и УНП из надписей (текстовые поля поверх листа).
+
+    Так устроены счета из 1С: реквизиты нарисованы текстовым полем, в ячейках
+    их нет. Правила те же, что и для ячеек: подпись «Поставщик/Продавец/
+    Отправитель» и название организации сразу после неё; наша организация
+    поставщиком не бывает.
+    """
+    supplier, buyer, unp = "", "", ""
+    for text in texts:
+        if not text:
+            continue
+        rest = _label_inline(text, _SUPPLIER_LABELS)
+        if rest and not supplier:
+            name = clean_supplier(rest)
+            if name and looks_like_company(name) and not is_our_company(name):
+                supplier = name
+                m = _RE_UNP.search(text)
+                if m:
+                    unp = m.group(1)
+        rest = _label_inline(text, _BUYER_STRONG_LABELS + _BUYER_WEAK_LABELS)
+        if rest and not buyer:
+            name = clean_supplier(rest)
+            if name and looks_like_company(name) and is_our_company(name):
+                buyer = name
+    return supplier, buyer, unp
+
+
 def _supplier_from_sheets(sheets: Sequence[Sheet], max_rows: int = 80) -> str:
     # 1. по подписям
     for sheet in sheets:
@@ -655,14 +696,35 @@ def extract_meta(source: SourceFile) -> DocMeta:
                     if text:
                         texts.append(text)
 
+    # надписи поверх листа (текстовые поля): там же часто лежат реквизиты
+    extra = [clean_text(t) for t in (source.texts or []) if clean_text(t)]
+
     meta.supplier, meta.buyer = _supplier_and_buyer(sheets)
+    if not meta.supplier and extra:
+        drawn_supplier, drawn_buyer, drawn_unp = _supplier_from_texts(extra)
+        if drawn_supplier:
+            meta.supplier = drawn_supplier
+            if drawn_unp:
+                meta.supplier_unp = drawn_unp
+        if not meta.buyer and drawn_buyer:
+            meta.buyer = drawn_buyer
+
     for text in texts:
         m = _RE_UNP.search(text)
         if m:
-            meta.supplier_unp = m.group(1)
+            meta.supplier_unp = meta.supplier_unp or m.group(1)
             break
 
     number, doc_type, date, _ = _number_date_from_texts(texts)
+    if not number or date is None:
+        # номер и дата бывают только в надписи поверх листа
+        drawn_number, drawn_type, drawn_date, _ = _number_date_from_texts(extra)
+        if not number and drawn_number:
+            number = drawn_number
+        if date is None and drawn_date is not None:
+            date = drawn_date
+        if not doc_type and drawn_type:
+            doc_type = drawn_type
     label_number, label_date = _label_values(sheets)
     from_doc = bool(number or date is not None or label_number)
 
