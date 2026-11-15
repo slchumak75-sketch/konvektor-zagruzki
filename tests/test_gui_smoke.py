@@ -184,6 +184,45 @@ def test_quantity_and_vat_have_no_decimal_comma(gui):
     assert all("," not in rate for rate in rates), rates
 
 
+def test_folder_buttons_and_no_mandatory_choice(gui):
+    """Папку выбирать не обязательно: есть кнопки «Документы» и «Загрузки»."""
+    app, module, _ = gui
+    app.on_use_documents()
+    assert app.out_var.get() == module.documents_dir()
+    assert app.folder_var.get() == module.documents_dir()
+    app.on_use_downloads()
+    assert app.out_var.get() == module.downloads_dir()
+    assert app.folder_var.get() == module.downloads_dir()
+
+
+def test_second_save_does_not_overwrite(gui):
+    """Повторное сохранение создаёт новый файл, а не затирает предыдущий."""
+    app, _, _ = gui
+    source = str(app.files[0])
+
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    _run(app)
+    first = app._last_outputs[0]
+    assert os.path.exists(first)
+
+    # тот же документ разбираем и сохраняем ещё раз
+    app._add_files([source])
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    _run(app)
+    second = app._last_outputs[0]
+    assert second != first
+    assert second.endswith("(2).xlsx"), second
+    assert os.path.exists(first) and os.path.exists(second)
+    assert sorted(os.listdir(app.test_documents)) == [
+        "ООО ОМА 19.10.2026 (2).xlsx",
+        "ООО ОМА 19.10.2026.xlsx",
+    ]
+
+
 def test_save_button_is_disabled_until_conversion(gui):
     app, _, dialogs = gui
     assert app.save_btn.cget("state") == "disabled"

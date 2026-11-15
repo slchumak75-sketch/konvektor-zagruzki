@@ -319,16 +319,62 @@ def test_quantity_and_vat_are_plain_numbers(combined):
             assert qty.value.is_integer(), qty.value
         if isinstance(rate.value, float):
             assert rate.value.is_integer(), rate.value
-        assert qty.number_format == "#,##0.###"
-        assert rate.number_format == "0.##"
+        # целые — формат «0», чтобы в Excel не было ни «12,00», ни «12,»
+        assert qty.number_format == "0", qty.number_format
+        assert rate.number_format == "0", rate.number_format
 
 
 def test_field_number_format():
     from konvektor.writer import field_number_format, plain_number
 
-    assert field_number_format("количество") == "#,##0.###"
+    assert field_number_format("количество", 12) == "0"
+    assert field_number_format("количество", 0.5) == "0.###"
+    assert field_number_format("ставка НДС", 20) == "0"
     assert field_number_format("ставка НДС") == "0.##"
-    assert field_number_format("цена") == "#,##0.00"
+    assert field_number_format("цена", 2.5) == "#,##0.00"
     assert field_number_format("") == "#,##0.00"
     assert plain_number(12.0) == 12 and isinstance(plain_number(12.0), int)
     assert plain_number(0.5) == 0.5
+    # «6,» и «1 234,5» из текстовых ячеек поставщика тоже становятся числами
+    assert plain_number("6,") == 6
+    assert plain_number("1 234,5") == 1234.5
+    assert plain_number("") == ""
+    assert plain_number("нет") == "нет"
+
+
+def test_repeated_conversion_creates_new_file(known_paths, tmp_path):
+    """Повторная конвертация не затирает прошлый файл: появляется «… (2).xlsx»."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    first = convert(
+        [str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path))
+    )
+    second = convert(
+        [str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path))
+    )
+    assert first.outputs == [str(tmp_path / "ООО ОМА 19.10.2026.xlsx")]
+    assert second.outputs == [str(tmp_path / "ООО ОМА 19.10.2026 (2).xlsx")]
+    assert len(list(tmp_path.iterdir())) == 2
+    # первый файл остался на месте
+    assert os.path.exists(first.outputs[0])
+
+
+def test_planned_output_is_unique_too(known_paths, tmp_path):
+    """Предпросмотр показывает то имя, под которым файл реально появится."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    (tmp_path / "ООО ОМА 19.10.2026.xlsx").write_text("старый результат")
+    result = convert(
+        [str(path)],
+        "",
+        ConvertOptions(naming="auto", output_dir=str(tmp_path), write=False),
+    )
+    assert result.planned_output == str(tmp_path / "ООО ОМА 19.10.2026 (2).xlsx")
+
+
+def test_downloads_dir_exists():
+    from konvektor.pipeline import downloads_dir
+
+    assert os.path.isdir(downloads_dir())

@@ -135,6 +135,34 @@ def documents_dir() -> str:
     return home
 
 
+def downloads_dir() -> str:
+    """Папка «Загрузки» пользователя (Windows: C:\\Users\\<имя>\\Downloads)."""
+    home = os.path.expanduser("~")
+    for name in ("Downloads", "Загрузки", "Закачки"):
+        candidate = os.path.join(home, name)
+        if os.path.isdir(candidate):
+            return candidate
+    return documents_dir()
+
+
+def unique_output_path(path: str) -> str:
+    """Не перезаписывать готовый файл: «имя.xlsx» → «имя (2).xlsx».
+
+    Пользователь просил, чтобы каждая конвертация давала новый файл,
+    а не затирала предыдущий результат.
+    """
+    if not os.path.exists(path):
+        return path
+    folder, name = os.path.split(path)
+    stem, ext = os.path.splitext(name)
+    i = 2
+    while True:
+        candidate = os.path.join(folder, f"{stem} ({i}){ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
+
+
 def output_filename(meta: Optional[DocMeta], separator: str = " ") -> str:
     """Имя файла результата: «поставщик дата.xlsx».
 
@@ -331,9 +359,11 @@ def convert(
     if options.naming == "auto":
         base_dir = options.output_dir or documents_dir()
         if len(per_file_items) == 1:
-            out_path = output_path_for(metas.get(per_file_items[0][0]), base_dir)
+            out_path = unique_output_path(
+                output_path_for(metas.get(per_file_items[0][0]), base_dir)
+            )
         elif not out_path:
-            out_path = default_output_name(base_dir)
+            out_path = unique_output_path(default_output_name(base_dir))
         result.planned_output = out_path
         log(f"  файл результата: {out_path}")
     elif not out_path:
@@ -360,7 +390,9 @@ def convert(
             if not items:
                 continue
             if options.naming == "auto":
-                name = output_path_for(metas.get(path), options.output_dir or documents_dir())
+                name = unique_output_path(
+                    output_path_for(metas.get(path), options.output_dir or documents_dir())
+                )
             else:
                 name = _unique_path(base_dir, stem, path)
             payload = WorkbookPayload(

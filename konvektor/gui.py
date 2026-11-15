@@ -32,8 +32,10 @@ from .pipeline import (
     ConvertResult,
     convert,
     documents_dir,
+    downloads_dir,
     is_supported,
 )
+from .writer import plain_number
 
 try:  # pragma: no cover - зависит от сборки Python
     import tkinter as tk
@@ -159,24 +161,38 @@ class KonvektorApp(_Base):
         mid = ttk.LabelFrame(self, text="2. Куда сохранить")
         mid.pack(fill="x", padx=10, pady=4)
 
+        self.out_var = tk.StringVar(value="")
+        self.folder_var = tk.StringVar(value="")
+
         row1 = ttk.Frame(mid)
         row1.pack(fill="x", padx=8, pady=(8, 2))
-        ttk.Label(row1, text="Папка:").pack(side="left")
-        self.out_var = tk.StringVar(value="")
-        ttk.Entry(row1, textvariable=self.out_var).pack(
-            side="left", fill="x", expand=True, padx=6
+        ttk.Label(row1, text="Папка сохранения:").pack(side="left")
+        ttk.Label(
+            row1, textvariable=self.folder_var, foreground="#1F4E78"
+        ).pack(side="left", padx=6)
+
+        row2 = ttk.Frame(mid)
+        row2.pack(fill="x", padx=8, pady=(0, 2))
+        ttk.Button(row2, text="Документы", command=self.on_use_documents).pack(side="left")
+        ttk.Button(row2, text="Загрузки", command=self.on_use_downloads).pack(
+            side="left", padx=(6, 0)
         )
-        ttk.Button(row1, text="Обзор…", command=self.on_browse_output).pack(side="left")
+        ttk.Button(row2, text="Другая папка…", command=self.on_browse_output).pack(
+            side="left", padx=(6, 0)
+        )
 
         ttk.Label(
             mid,
-            text="Имя файла задавать не нужно: он всегда называется "
-            "«поставщик дата документа.xlsx» (например, «ООО ОМА 19.10.2026.xlsx»). "
-            "Пусто — папка «Документы».",
+            text="Выбирать папку не обязательно: по умолчанию файл кладётся "
+            "в «Документы». Имя программа задаёт сама — «поставщик дата.xlsx» "
+            "(например, «ООО ОМА 19.10.2026.xlsx»); если такой файл уже есть, "
+            "новый сохранится как «ООО ОМА 19.10.2026 (2).xlsx» — старый не затирается.",
             foreground="#555555",
             wraplength=1040,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        self._update_folder_label()
 
         # --- действие
         act = ttk.Frame(self)
@@ -272,6 +288,19 @@ class KonvektorApp(_Base):
         if path:
             self._add_files([path])
 
+    def on_use_documents(self) -> None:
+        """Сохранять в «Документы» — путь по умолчанию, ничего выбирать не нужно."""
+        self.out_var.set(documents_dir())
+        self._update_folder_label()
+
+    def on_use_downloads(self) -> None:
+        """Сохранять в «Загрузки»."""
+        self.out_var.set(downloads_dir())
+        self._update_folder_label()
+
+    def _update_folder_label(self) -> None:
+        self.folder_var.set(self.out_var.get().strip() or documents_dir())
+
     def on_browse_output(self) -> None:
         """Выбираем только папку: имя файла программа задаёт сама."""
         folder = self.output_dir()
@@ -282,6 +311,7 @@ class KonvektorApp(_Base):
         )
         if path:
             self.out_var.set(os.path.normpath(path))
+            self._update_folder_label()
 
     def output_dir(self) -> str:
         """Папка сохранения из поля «Папка» (пустая строка — «Документы»).
@@ -513,6 +543,11 @@ class KonvektorApp(_Base):
             return str(value).lower()
         if isinstance(value, int):
             return str(value)
+        if column in _WHOLE_PREVIEW:
+            number = plain_number(value)
+            if isinstance(number, str):
+                return number
+            value = number
         if isinstance(value, float):
             if column in _WHOLE_PREVIEW:
                 if value.is_integer():
