@@ -48,6 +48,29 @@ MONEY_FMT = "#,##0.00"
 QTY_FMT = "#,##0.###"
 RATE_FMT = "0.##"
 
+#: Формат числа по названию поля: количество и ставка НДС — без лишних нулей
+#: и запятой (12 и 20, а не 12,00 и 20,00), деньги — с копейками.
+FIELD_FORMATS = {
+    "количество": QTY_FMT,
+    "ставка НДС": RATE_FMT,
+    "цена": MONEY_FMT,
+    "сумма": MONEY_FMT,
+    "сумма НДС": MONEY_FMT,
+    "сумма с НДС": MONEY_FMT,
+}
+
+
+def field_number_format(field: str) -> str:
+    """Формат ячейки для значения из поля `field` (по умолчанию — деньги)."""
+    return FIELD_FORMATS.get((field or "").strip(), MONEY_FMT)
+
+
+def plain_number(value):
+    """Целое число записываем как целое: 12.0 -> 12, чтобы Excel не показывал 12,00."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
 INVALID_SHEET = re.compile(r"[\\/*?:\[\]]")
 
 
@@ -163,8 +186,18 @@ def _write_data_sheet(ws: Worksheet, items: Sequence[Item], with_source: bool = 
             if cell.value is not None:
                 cell.value = str(cell.value)
                 cell.number_format = "@"
-        for c, fmt in ((5, QTY_FMT), (6, MONEY_FMT), (7, MONEY_FMT), (8, RATE_FMT), (9, MONEY_FMT), (10, MONEY_FMT)):
-            ws.cell(row=r, column=c).number_format = fmt
+        for c, fmt in (
+            (5, QTY_FMT),
+            (6, MONEY_FMT),
+            (7, MONEY_FMT),
+            (8, RATE_FMT),
+            (9, MONEY_FMT),
+            (10, MONEY_FMT),
+        ):
+            cell = ws.cell(row=r, column=c)
+            cell.number_format = fmt
+            if c in (5, 8):
+                cell.value = plain_number(cell.value)
 
         for fname, col in (
             ("количество", 5),
@@ -252,7 +285,9 @@ def _write_issues_sheet(ws: Worksheet, issues: Sequence[Issue]) -> None:
             cell.border = BORDER
             cell.alignment = WRAP_TOP if c in (3, 6, 11) else CENTER_TOP
             if c in (8, 9, 10):
-                cell.number_format = MONEY_FMT
+                cell.number_format = field_number_format(issue.field)
+                if issue.field in ("количество", "ставка НДС"):
+                    cell.value = plain_number(val)
         ws.cell(row=i + 1, column=2).fill = severity_fill.get(issue.severity, severity_fill["info"])
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:K{len(issues) + 1}"

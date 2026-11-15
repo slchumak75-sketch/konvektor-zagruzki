@@ -298,3 +298,37 @@ def test_write_false_only_plans_file(known_paths, tmp_path):
     # предпросмотр строится из тех же позиций, что попали бы в книгу
     assert len(result.items) == 11
     assert result.items[0].name
+
+
+def test_no_columns_after_sum_with_vat(combined):
+    """После «сумма с НДС» колонок нет: ровно 10 колонок образца."""
+    _, path = combined
+    ws = load_workbook(path)["Данные"]
+    header = [c.value for c in ws[1] if c.value is not None]
+    assert header == TEMPLATE_COLUMNS
+    assert ws.max_column == len(TEMPLATE_COLUMNS)
+
+
+def test_quantity_and_vat_are_plain_numbers(combined):
+    """Количество и ставка НДС записаны целыми и с узким форматом — без «12,00»."""
+    _, path = combined
+    ws = load_workbook(path)["Данные"]
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row - 1):
+        qty, rate = row[4], row[7]
+        if isinstance(qty.value, float):
+            assert qty.value.is_integer(), qty.value
+        if isinstance(rate.value, float):
+            assert rate.value.is_integer(), rate.value
+        assert qty.number_format == "#,##0.###"
+        assert rate.number_format == "0.##"
+
+
+def test_field_number_format():
+    from konvektor.writer import field_number_format, plain_number
+
+    assert field_number_format("количество") == "#,##0.###"
+    assert field_number_format("ставка НДС") == "0.##"
+    assert field_number_format("цена") == "#,##0.00"
+    assert field_number_format("") == "#,##0.00"
+    assert plain_number(12.0) == 12 and isinstance(plain_number(12.0), int)
+    assert plain_number(0.5) == 0.5

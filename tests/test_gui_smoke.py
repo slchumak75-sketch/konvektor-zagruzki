@@ -109,6 +109,14 @@ def test_convert_only_previews_and_save_writes_file(gui):
     assert os.path.exists(expected)
     assert os.listdir(app.test_documents) == ["ООО ОМА 19.10.2026.xlsx"]
 
+    # в файле ровно 10 колонок образца: после «сумма с НДС» ничего нет
+    from konvektor import TEMPLATE_COLUMNS
+    from openpyxl import load_workbook
+
+    header = [c.value for c in load_workbook(expected)["Данные"][1]]
+    assert header == TEMPLATE_COLUMNS
+    assert "файл" not in header and "строка" not in header
+
 
 def test_no_status_field_and_no_progressbar(gui, known_paths):
     """Надпись «Готов к работе» и шкала прогресса убраны."""

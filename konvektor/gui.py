@@ -308,8 +308,9 @@ class KonvektorApp(_Base):
         folder = self.output_dir()
         options = ConvertOptions(
             mode=MODE_COMBINED,
-            # колонки «файл» и «строка» нужны всегда (в сохранённом файле)
-            add_source_columns=True,
+            # в файле ровно те же 10 колонок, что в образце:
+            # после «сумма с НДС» ничего не добавляем
+            add_source_columns=False,
             # имя всегда «поставщик дата.xlsx» — в выбранной папке или «Документах»
             naming="auto",
             output_dir=folder,
@@ -357,7 +358,7 @@ class KonvektorApp(_Base):
         folder = self._pending_out or self.output_dir()
         options = ConvertOptions(
             mode=MODE_COMBINED,
-            add_source_columns=True,
+            add_source_columns=False,
             naming="auto",
             output_dir=folder,
             write=True,
