@@ -62,3 +62,28 @@ def test_diagnose_garbage_file(tmp_path, capsys):
     assert code in (0, 1)
     assert "Файл:" in out
     assert "Итог:" in out
+
+
+def test_explain_prints_roles(known_paths, capsys):
+    path = _known(known_paths, "Счет на оплату № УТ-542")
+    if path is None:
+        pytest.skip("нет файла-образца")
+    assert main(["--explain", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "колонок распознано:" in out
+    assert "наименование" in out and "-> D" in out
+    assert "доверие:" in out
+
+
+def test_json_contains_analysis(known_paths, tmp_path, capsys):
+    path = _known(known_paths, "КХ2104033")
+    if path is None:
+        pytest.skip("нет файла-образца")
+    out = tmp_path / "out.xlsx"
+    assert main([str(path), "-o", str(out), "--json", "-q"]) == 0
+    payload = _first_json(capsys.readouterr().out)
+    analysis = payload["analysis"][0]
+    assert analysis["items"] == 19
+    assert analysis["coverage"].endswith("/10")
+    assert analysis["quality"] in ("высокое", "среднее", "низкое")
+    assert analysis["blocks"][0]["header_row"] == 10

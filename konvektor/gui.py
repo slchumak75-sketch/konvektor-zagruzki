@@ -311,6 +311,14 @@ class KonvektorApp(_Base):
             f"Позиций: {result.items_count}; ошибок: {result.error_count}; "
             f"предупреждений: {result.warning_count}; рассчитано значений: {result.computed_count}"
         )
+        for message in result.errors:
+            self._log("  ОШИБКА: " + message)
+        for path, report in result.analysis.items():
+            if report.needs_review:
+                self._log(
+                    f"  ПРОВЕРИТЬ: {os.path.basename(path)} — доверие {report.confidence:.2f}"
+                    f" ({report.quality}); " + "; ".join(report.reasons[:3])
+                )
         for issue in (result.report.errors if result.report else [])[:20]:
             self._log(
                 f"  РАСХОЖДЕНИЕ: {os.path.basename(issue.source)} стр.{issue.row}: {issue.message}"
@@ -324,6 +332,11 @@ class KonvektorApp(_Base):
                 f"  {os.path.basename(p)}: {m.supplier or 'поставщик не найден'}"
                 + (f", {m.doc_label}" if m.doc_number else "")
                 + (f" от {m.date_text}" if m.doc_date else "")
+                + (
+                    f" — требует проверки ({result.analysis[p].confidence:.2f})"
+                    if p in result.analysis and result.analysis[p].needs_review
+                    else ""
+                )
                 for p, m in result.metas.items()
             )
             text = (

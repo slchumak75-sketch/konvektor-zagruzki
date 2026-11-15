@@ -198,3 +198,34 @@ def test_default_output_name():
 
 def test_version_present():
     assert __version__
+
+
+def test_write_falls_back_when_folder_is_locked(known_paths, tmp_path, monkeypatch):
+    """Если рядом с файлом писать нельзя — результат сохраняется в домашнюю папку."""
+    import konvektor.pipeline as pipeline
+    from konvektor import writer
+
+    real = writer.write_workbook
+    calls = {"n": 0}
+
+    def flaky(path, payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("папка только для чтения")
+        return real(path, payload)
+
+    monkeypatch.setattr(pipeline, "write_workbook", flaky)
+    out = tmp_path / "out.xlsx"
+    result = convert([str(known_paths[0])], str(out))
+    assert result.outputs and os.path.exists(result.outputs[0])
+    assert result.outputs[0] != str(out)
+    assert any("не удалось записать" in n for n in result.notes)
+
+
+def test_analysis_is_built_for_every_file(combined):
+    result, _ = combined
+    assert len(result.analysis) == 10
+    for report in result.analysis.values():
+        assert report.items > 0
+        assert report.blocks
+        assert 0.0 <= report.confidence <= 1.0

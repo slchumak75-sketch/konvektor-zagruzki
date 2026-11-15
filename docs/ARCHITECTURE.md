@@ -38,6 +38,8 @@
 | `konvektor/textutil.py` | разбор чисел/ставок/штрихкодов/артикулов, нормализация текста | `parse_number`, `parse_barcode`, `find_barcode_in_text`, `find_article_in_text`, `ean_ok`, `norm_header` |
 | `konvektor/readers.py` | чтение файлов, определение формата, кодировки | `read_source(path) -> SourceFile`, `Sheet`, `sniff_kind` |
 | `konvektor/meta.py` | реквизиты документа: поставщик, УНП, тип/номер/дата документа | `extract_meta(SourceFile) -> DocMeta`, `meta_from_path(path)`, `parse_date`, `from_filename` |
+| `konvektor/layout.py` | анализ раскладки: профиль колонок, достройка и починка ролей по данным, склейка шапки, разворот таблицы | `find_headers`, `find_transposed_block`, `repair_numeric_roles`, `infer_barcode_column`, `BlockInfo`, `AnalysisDecision` |
+| `konvektor/analysis.py` | метрики разбора и доверие: покрытие полей, арифметика, полнота, «требует проверки» | `build_report`, `AnalysisReport`, `format_report` |
 | `konvektor/detect.py` | смысл заголовков, поиск шапки, эвристики строк | `classify_header`, `detect_header`, `total_label`, `total_field_from_label`, `is_furniture` |
 | `konvektor/extract.py` | лист → позиции и итоговые строки | `Item`, `DocTotal`, `extract_file`, `extract_sheet` |
 | `konvektor/validate.py` | проверки и достройка значений | `validate_items`, `check_document_totals`, `Issue`, `detect_vat_mode` |

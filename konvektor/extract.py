@@ -11,9 +11,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
-from . import detect
+from . import detect, layout
 from .detect import HeaderInfo
 from .readers import Sheet, SourceFile
 from .textutil import (
@@ -90,6 +90,10 @@ class SheetExtraction:
     totals: List[DocTotal] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     headers: int = 0
+    #: решения анализа раскладки (для --explain и листа «Проверки»)
+    decisions: List[layout.AnalysisDecision] = field(default_factory=list)
+    #: разобранные блоки таблиц (шапка, роли, качество)
+    blocks: List[layout.BlockInfo] = field(default_factory=list)
 
 
 def _col_value(values: List[Any], col: Optional[int]) -> Any:
@@ -203,11 +207,20 @@ def extract_sheet(sf: SourceFile, sheet: Sheet) -> SheetExtraction:
     if not grid:
         return res
 
-    headers: List[Tuple[int, HeaderInfo]] = []
-    for i, row in enumerate(grid):
-        h = detect.detect_header(row, i)
-        if h is not None:
-            headers.append((i, h))
+    headers = layout.find_headers(grid)
+    transposed = False
+    if not headers:
+        # шапки в строках нет — возможно, таблица «на бок» (поля в первом столбце)
+        block = layout.find_transposed_block(grid)
+        if block is not None:
+            _start, tgrid, decision = block
+            theaders = layout.find_headers(tgrid)
+            if theaders:
+                grid = tgrid
+                headers = theaders
+                transposed = True
+                res.decisions.append(decision)
+
     res.headers = len(headers)
     if not headers:
         res.warnings.append(f"{sf.path} [{sheet.name}]: шапка таблицы не найдена")
@@ -215,10 +228,35 @@ def extract_sheet(sf: SourceFile, sheet: Sheet) -> SheetExtraction:
 
     for idx, (hrow, h) in enumerate(headers):
         end = headers[idx + 1][0] if idx + 1 < len(headers) else len(grid)
+        data_start = hrow + max(1, h.span)
+
+        # --- проверка гипотез по данным, а не только по подписям -----------
+        prof = layout.profiles(grid, data_start, end)
+        decision = layout.infer_barcode_column(h, prof)
+        if decision is not None:
+            res.decisions.append(decision)
+        decision = layout.repair_numeric_roles(h, grid, data_start, end)
+        if decision is not None:
+            res.decisions.append(decision)
+
+        res.blocks.append(
+            layout.BlockInfo(
+                sheet=sheet.name,
+                row=hrow + 1,
+                span=max(1, h.span),
+                roles=dict(h.cols),
+                headers=layout.header_texts(h),
+                quality=dict(h.quality),
+                arithmetic=layout.arithmetic_ratio(grid, h, data_start, end),
+                transposed=transposed,
+            )
+        )
+
         prev_item: Optional[Item] = None
-        for r in range(hrow + 1, end):
+        for r in range(data_start, end):
             values = grid[r]
-            row_no = r + 1  # человеческая нумерация строк Excel
+            # в развёрнутой таблице строка = столбец исходного листа
+            row_no = (r + 1) if not transposed else r + 1
             if detect.row_is_empty(values):
                 continue
             if detect.is_numbering_row(values):
@@ -295,6 +333,8 @@ def extract_file(sf: SourceFile) -> SheetExtraction:
         total.items.extend(part.items)
         total.totals.extend(part.totals)
         total.warnings.extend(part.warnings)
+        total.decisions.extend(part.decisions)
+        total.blocks.extend(part.blocks)
         total.headers += part.headers
     if not total.items and not total.warnings:
         total.warnings.append(f"{sf.path}: позиции не найдены")

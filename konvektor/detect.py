@@ -75,6 +75,8 @@ class HeaderInfo:
     cols: Dict[str, int]
     quality: Dict[str, float] = field(default_factory=dict)
     raw: List[Any] = field(default_factory=list)
+    #: сколько строк занимает шапка (2 — если склеена из двух строк)
+    span: int = 1
 
     @property
     def score(self) -> float:

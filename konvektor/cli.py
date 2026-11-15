@@ -17,6 +17,7 @@ from .pipeline import (
     convert,
     default_output_name,
     diagnose,
+    explain,
     is_supported,
     selftest,
 )
@@ -54,6 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     p.add_argument(
+        "--explain",
+        nargs="+",
+        metavar="ФАЙЛ",
+        help="показать, как разобран файл: шапка, роли колонок, арифметика, доверие",
+    )
+    p.add_argument(
         "--diagnose",
         metavar="ФАЙЛ",
         help="подробно разобрать один файл (почему не читается, что найдено)",
@@ -78,6 +85,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         ok, msg = selftest(args.selftest, log=log)
         print(("САМОПРОВЕРКА: OK — " if ok else "САМОПРОВЕРКА: FAIL — ") + msg)
         return 0 if ok else 1
+
+    if args.explain:
+        for text in explain(args.explain, log=lambda m: None):
+            print(text)
+            print()
+        return 0
 
     if args.diagnose:
         ok, lines = diagnose(args.diagnose, log=lambda m: None)
@@ -133,6 +146,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 }
                 for path, meta in result.metas.items()
             ],
+            "analysis": [report.as_dict() for report in result.analysis.values()],
             "stats": [
                 {
                     "file": s.path,

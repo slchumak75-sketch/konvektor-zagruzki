@@ -84,6 +84,9 @@ jobs:
           .\dist\Konvektor-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
 
+          .\dist\Konvektor-cli.exe --explain "КХ2104033 (1).xls"
+          if ($LASTEXITCODE -ne 0) { throw "Режим --explain в .exe не работает: код $LASTEXITCODE" }
+
           .\dist\Konvektor-cli.exe --diagnose "КХ2104033 (1).xls"
           if ($LASTEXITCODE -ne 0) { throw "Режим --diagnose в .exe не работает: код $LASTEXITCODE" }
 

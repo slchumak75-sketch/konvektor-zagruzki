@@ -73,6 +73,11 @@ class FileStat:
     doc_number: str = ""
     doc_date: str = ""
     meta_warnings: List[str] = field(default_factory=list)
+    #: качество разбора (konvektor/analysis.py)
+    quality: str = ""
+    confidence: float = 0.0
+    roles_found: int = 0
+    review: bool = False
 
     @property
     def doc_label(self) -> str:
@@ -270,8 +275,11 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
         "Предупреждений",
         "Рассчитано значений",
         "Цены",
+        "Качество разбора",
+        "Доверие",
+        "Проверить",
     ]
-    widths = [46, 9, 26, 38, 15, 26, 14, 10, 15, 15, 16, 9, 15, 20, 26]
+    widths = [46, 9, 26, 38, 15, 26, 14, 10, 15, 15, 16, 9, 15, 20, 26, 18, 10, 10]
     _write_header(ws, 1, headers)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -294,11 +302,16 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
             st.warnings,
             st.computed,
             MODE_TITLES.get(st.vat_mode, st.vat_mode),
+            st.quality,
+            round(st.confidence, 2) if st.confidence else None,
+            "да" if st.review else "",
         ]
         for c, val in enumerate(values, start=1):
             cell = ws.cell(row=r, column=c, value=val if val != "" else None)
             cell.border = BORDER
             cell.alignment = WRAP_TOP if c in (1, 3, 4, 6, 15) else CENTER_TOP
+            if c == 18 and st.review and val:
+                cell.fill = PatternFill("solid", fgColor=COLOR_WARNING)
             if c in (9, 10, 11):
                 cell.number_format = MONEY_FMT
             if c in (5, 7):

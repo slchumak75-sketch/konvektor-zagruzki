@@ -13,6 +13,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .analysis import AnalysisReport, build_report, format_report
 from .extract import Item, extract_file
 from .meta import DocMeta, extract_meta, fmt_date
 from .readers import read_source
@@ -67,6 +68,8 @@ class ConvertResult:
     errors: List[str] = field(default_factory=list)
     #: реквизиты по каждому файлу: путь -> DocMeta (поставщик, документ, дата)
     metas: Dict[str, DocMeta] = field(default_factory=dict)
+    #: метрики разбора по каждому файлу (покрытие полей, арифметика, доверие)
+    analysis: Dict[str, AnalysisReport] = field(default_factory=dict)
 
     @property
     def items_count(self) -> int:
@@ -149,6 +152,7 @@ def convert(
     blocks: Dict[Tuple[str, str, int], List[Item]] = {}
     per_file_items: List[Tuple[str, List[Item]]] = []
     metas: Dict[str, DocMeta] = {}
+    analyses: Dict[str, AnalysisReport] = {}
 
     for path in files:
         log(f"Читаю: {os.path.basename(path)}")
@@ -192,6 +196,21 @@ def convert(
         for w in meta.warnings:
             log("  ! " + w)
 
+        analysis = build_report(path, src, extracted, meta)
+        analyses[path] = analysis
+        result.analysis[path] = analysis
+        log(
+            f"  разбор: колонок {analysis.roles_found}/{analysis.roles_total}, "
+            + (
+                "арифметика н/д, "
+                if analysis.arithmetic is None
+                else f"арифметика {analysis.arithmetic:.0%}, "
+            )
+            + f"доверие {analysis.confidence:.2f} ({analysis.quality})"
+        )
+        if analysis.needs_review:
+            log("  ! разбор требует проверки: " + "; ".join(analysis.reasons[:3]))
+
         all_items.extend(extracted.items)
         totals.extend(extracted.totals)
         for it in extracted.items:
@@ -232,6 +251,12 @@ def convert(
             st.doc_number = meta.doc_number
             st.doc_date = fmt_date(meta.doc_date)
             st.meta_warnings = list(meta.warnings)
+        analysis = analyses.get(path)
+        if analysis is not None:
+            st.quality = analysis.quality
+            st.confidence = analysis.confidence
+            st.roles_found = analysis.roles_found
+            st.review = analysis.needs_review
         for note in result.notes:
             if note.startswith(os.path.basename(path) + ": листы"):
                 st.sheets = note.split("[", 1)[1].split("]", 1)[0]
@@ -257,8 +282,7 @@ def convert(
                 notes=result.notes,
                 with_source=options.add_source_columns,
             )
-            result.outputs.append(write_workbook(name, payload))
-            log(f"  записан: {name}")
+            result.outputs.append(_write_with_fallback(name, payload, result, log))
     else:
         if options.mode == MODE_SHEETS:
             sheets = [(os.path.splitext(os.path.basename(p))[0], items) for p, items in per_file_items]
@@ -271,14 +295,61 @@ def convert(
             notes=result.notes,
             with_source=options.add_source_columns,
         )
-        result.outputs.append(write_workbook(out_path, payload))
-        log(f"  записан: {out_path}")
+        result.outputs.append(_write_with_fallback(out_path, payload, result, log))
 
     log(
         f"Готово: позиций {len(all_items)}, ошибок {result.error_count}, "
         f"предупреждений {result.warning_count}, рассчитано {result.computed_count}"
     )
     return result
+
+
+def _write_with_fallback(
+    path: str, payload: WorkbookPayload, result: ConvertResult, log: Logger
+) -> str:
+    """Записать книгу; если папка недоступна — сохранить в «Документы»/домашнюю.
+
+    Типичный случай на Windows: файл открыт из защищённой папки или с сетевого
+    диска только для чтения — рядом писать нельзя. Молча падать нельзя, поэтому
+    результат уходит в доступное место, а пользователь видит, куда именно.
+    """
+    try:
+        written = write_workbook(path, payload)
+        log(f"  записан: {written}")
+        return written
+    except OSError as exc:
+        base = os.path.join(os.path.expanduser("~"), "Документы")
+        if not os.path.isdir(base):
+            base = os.path.expanduser("~")
+        alt = os.path.join(base, os.path.basename(path))
+        written = write_workbook(alt, payload)
+        message = (
+            f"не удалось записать {path} ({type(exc).__name__}: {exc}); "
+            f"результат сохранён в {written}"
+        )
+        result.notes.append(message)
+        log("  ! " + message)
+        return written
+
+
+def explain(paths: Sequence[str], log: Logger = _noop) -> List[str]:
+    """Текстовые отчёты о разборе файлов (ключ --explain)."""
+    out: List[str] = []
+    files, missing = collect_files(paths)
+    for m in missing:
+        out.append(f"файл не найден: {m}")
+    for path in files:
+        try:
+            src = read_source(path)
+            extracted = extract_file(src)
+        except Exception as exc:  # noqa: BLE001 - показываем причину
+            out.append(f"{path}: не удалось прочитать ({type(exc).__name__}: {exc})")
+            continue
+        meta = extract_meta(src)
+        report = build_report(path, src, extracted, meta)
+        out.append(format_report(report))
+        log(format_report(report))
+    return out
 
 
 def _unique_path(base_dir: str, stem: str, source: str) -> str:
@@ -350,6 +421,19 @@ def diagnose(path: str, log: Logger = _noop) -> Tuple[bool, List[str]]:
         )
         extracted = extract_file(src)
         say(f"Позиций найдено: {len(extracted.items)}")
+        report = build_report(path, src, extracted, meta)
+        say(
+            f"Качество разбора: {report.quality}; колонок {report.roles_found}"
+            f"/{report.roles_total}; "
+            + (
+                "арифметика не проверялась; "
+                if report.arithmetic is None
+                else f"арифметика {report.arithmetic:.0%}; "
+            )
+            + f"доверие {report.confidence:.2f}"
+        )
+        for reason in report.reasons[:8]:
+            say("  - " + reason)
         for warn in extracted.warnings[:10]:
             say("  ! " + warn)
         say("Итог: файл читается" if extracted.items else "Итог: файл читается, но позиции не найдены")
