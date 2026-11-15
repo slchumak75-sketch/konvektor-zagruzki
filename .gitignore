@@ -1,0 +1,15 @@
+# Сборка
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.idea/
+.vscode/
+
+# Результаты конвертации не должны попадать в репозиторий
+Загрузка_*.xlsx
+konvektor_out/
+~$*.xlsx
