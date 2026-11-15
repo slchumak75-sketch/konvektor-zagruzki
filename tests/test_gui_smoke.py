@@ -287,3 +287,54 @@ def test_no_folder_or_list_buttons_left(gui):
     assert not hasattr(app, "open_after_var")
     assert not hasattr(app, "log_text")
     assert hasattr(app, "preview")
+
+
+def test_icon_assets_exist():
+    """Иконка приложения: PNG для окна и многоразмерный .ico для .exe."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    png = os.path.join(root, "assets", "konvektor_icon.png")
+    ico = os.path.join(root, "assets", "konvektor.ico")
+    assert os.path.exists(png) and os.path.getsize(png) > 2000
+    assert os.path.exists(ico) and os.path.getsize(ico) > 2000
+    with open(ico, "rb") as fh:
+        head = fh.read(6)
+    assert head[:4] == b"\x00\x00\x01\x00"  # сигнатура ICO
+
+
+def test_open_buttons_follow_save(gui, monkeypatch):
+    """«Открыть файл» и «Открыть папку» доступны только после сохранения."""
+    app, module, _ = gui
+    assert app.open_file_btn.cget("state") == "disabled"
+    assert app.open_folder_btn.cget("state") == "disabled"
+
+    opened = []
+    monkeypatch.setattr(module.KonvektorApp, "_open_path", staticmethod(opened.append))
+
+    app.on_open_result()          # файла ещё нет — только сообщение
+    assert opened == []
+
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    _run(app)
+    assert app.open_file_btn.cget("state") == "normal"
+    assert app.open_folder_btn.cget("state") == "normal"
+
+    app.on_open_result()
+    assert opened and opened[-1] == app._last_outputs[0]
+    app.on_open_folder()
+    assert opened[-1] == os.path.dirname(app._last_outputs[0])
+
+
+def test_new_conversion_disables_open_buttons(gui):
+    app, _, _ = gui
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    _run(app)
+    assert app.open_file_btn.cget("state") == "normal"
+    app._add_files([str(app._pending_source)])
+    app.on_convert()
+    _run(app)
+    assert app.open_file_btn.cget("state") == "disabled"
+    assert app.open_folder_btn.cget("state") == "disabled"

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import traceback
@@ -90,6 +91,19 @@ _WHOLE_PREVIEW = {"количество", "ставка НДС"}
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
 
+#: Оформление окна: спокойный светлый фон, тёмная шапка, один акцент.
+NAVY = "#1F3A5F"
+NAVY_LIGHT = "#2A4C77"
+BG = "#F4F6FA"
+CARD = "#FFFFFF"
+BORDER = "#D8E0EC"
+TEXT = "#1B2733"
+MUTED = "#5B6B7F"
+ACCENT = "#2F6FED"
+ACCENT_DARK = "#1F55C0"
+OK_GREEN = "#1E8E5A"
+ROW_ODD = "#F7F9FC"
+
 
 class KonvektorApp(_Base):
     """Главное окно."""
@@ -97,8 +111,12 @@ class KonvektorApp(_Base):
     def __init__(self, initial_files: Optional[List[str]] = None):
         super().__init__()
         self.title(f"{APP_NAME} {__version__}")
-        self.geometry("1100x720")
-        self.minsize(900, 600)
+        self.geometry("1180x780")
+        self.minsize(980, 640)
+        try:
+            self.configure(background=BG)
+        except Exception:  # noqa: BLE001 - оформление не критично
+            pass
 
         self.files: List[str] = []
         self._queue: "queue.Queue[tuple]" = queue.Queue()
@@ -136,78 +154,118 @@ class KonvektorApp(_Base):
                 continue
 
     def _build_ui(self) -> None:
-        # --- 1. один файл
-        top = ttk.LabelFrame(self, text="1. Файл для конвертации (по одному)")
-        top.pack(fill="x", padx=10, pady=(10, 4))
+        self._setup_theme()
 
+        # --- шапка: иконка, название, подзаголовок
+        header = tk.Frame(self, background=NAVY, height=76)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        icon = self._header_icon(header)
+        if icon is not None:
+            icon.pack(side="left", padx=(18, 12), pady=12)
+
+        titles = tk.Frame(header, background=NAVY)
+        titles.pack(side="left", anchor="w", pady=12)
+        ttk.Label(
+            titles, text=APP_NAME, style="Header.TLabel"
+        ).pack(anchor="w")
+        ttk.Label(
+            titles,
+            text="счета, накладные и прайсы → одна таблица по образцу",
+            style="HeaderSub.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            header, text=f"версия {__version__}", style="HeaderVer.TLabel"
+        ).pack(side="right", padx=18)
+
+        body = tk.Frame(self, background=BG)
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+
+        # --- шаг 1: файл
+        top = self._card(body, "ШАГ 1 · Файл для конвертации (по одному)")
+        row = ttk.Frame(top, style="Card.TFrame")
+        row.pack(fill="x", padx=14, pady=(10, 4))
+        self.file_var = tk.StringVar(value="файл не выбран")
+        ttk.Label(
+            row, textvariable=self.file_var, style="File.TLabel", anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            row, text="Выбрать файл…", style="Secondary.TButton",
+            command=self.on_add_files,
+        ).pack(side="right")
         ttk.Label(
             top,
             text="Поддерживаются .xls, .xlsx, .csv, .txt, .html. "
             "Файл можно перетащить мышью на ярлык Konvektor.exe.",
-            foreground="#555555",
-        ).pack(side="bottom", anchor="w", padx=8, pady=(0, 6))
+            style="Hint.TLabel",
+        ).pack(anchor="w", padx=14, pady=(0, 10))
 
-        self.file_var = tk.StringVar(value="файл не выбран")
-        ttk.Label(top, textvariable=self.file_var, anchor="w").pack(
-            side="left", fill="x", expand=True, padx=8, pady=8
-        )
-
-        ttk.Button(top, text="Выбрать файл…", command=self.on_add_files).pack(
-            side="right", padx=8, pady=8
-        )
-
-        # --- 2. куда сохранить
-        mid = ttk.LabelFrame(self, text="2. Куда сохранить")
-        mid.pack(fill="x", padx=10, pady=4)
-
-        row1 = ttk.Frame(mid)
-        row1.pack(fill="x", padx=8, pady=(8, 2))
-        ttk.Label(row1, text="Путь:").pack(side="left")
+        # --- шаг 2: куда сохранить
+        mid = self._card(body, "ШАГ 2 · Куда сохранить")
+        prow = ttk.Frame(mid, style="Card.TFrame")
+        prow.pack(fill="x", padx=14, pady=(10, 4))
+        ttk.Label(prow, text="Путь:", style="Card.TLabel").pack(side="left")
         # обычное поле пути, как в любой программе Windows: можно вписать любую
         # папку (в том числе на другом диске), можно стереть — тогда «Документы»
         self.out_var = tk.StringVar(value=documents_dir())
-        ttk.Entry(row1, textvariable=self.out_var).pack(
-            side="left", fill="x", expand=True, padx=6
+        ttk.Entry(prow, textvariable=self.out_var, style="Path.TEntry").pack(
+            side="left", fill="x", expand=True, padx=8
         )
-        # «Обзор…» — привычный выбор папки; поле остаётся обычным, текст можно
-        # вписать руками и стереть (тогда «Документы»)
-        ttk.Button(row1, text="Обзор…", command=self.on_browse_output).pack(side="left")
+        # «Обзор…» — привычный выбор папки; поле остаётся обычным
+        ttk.Button(
+            prow, text="Обзор…", style="Secondary.TButton", command=self.on_browse_output
+        ).pack(side="left")
 
         ttk.Label(
             mid,
-            text="Укажите папку, куда класть результат: впишите путь, вставьте его "
-            "из проводника или нажмите «Обзор…». Пусто — папка «Документы». "
-            "Имя файла программа задаёт сама — «поставщик дата.xlsx» "
-            "(например, «ООО ОМА 19.10.2026.xlsx»); если такой файл уже есть, "
-            "новый сохранится как «ООО ОМА 19.10.2026 (2).xlsx» — "
+            text="Впишите путь, вставьте его из проводника или нажмите «Обзор…». "
+            "Пусто — папка «Документы». Имя файла программа задаёт сама: "
+            "«поставщик + сегодняшняя дата.xlsx» (например, «ООО ОМА 15.11.2026.xlsx»); "
+            "если такой файл уже есть, новый сохранится как «… (2).xlsx» — "
             "старый не затирается.",
-            foreground="#555555",
-            wraplength=1040,
+            style="Hint.TLabel",
+            wraplength=1060,
             justify="left",
-        ).pack(anchor="w", padx=8, pady=(0, 8))
+        ).pack(anchor="w", padx=14, pady=(0, 10))
 
-        # --- действие
-        act = ttk.Frame(self)
-        act.pack(fill="x", padx=10, pady=4)
-        self.run_btn = ttk.Button(act, text="Конвертировать", command=self.on_convert)
+        # --- кнопки действий
+        act = ttk.Frame(body, style="Card.TFrame")
+        act.pack(fill="x", pady=(2, 10))
+
+        self.run_btn = ttk.Button(
+            act, text="Конвертировать", style="Primary.TButton", command=self.on_convert
+        )
         self.run_btn.pack(side="left")
         self.save_btn = ttk.Button(
-            act, text="Сохранить", command=self.on_save, state="disabled"
+            act, text="Сохранить", style="Secondary.TButton",
+            command=self.on_save, state="disabled",
         )
-        self.save_btn.pack(side="left", padx=(8, 0))
+        self.save_btn.pack(side="left", padx=(10, 0))
 
-        # --- 3. предпросмотр результата вместо журнала
-        bottom = ttk.LabelFrame(self, text="3. Результат (таблица)")
-        bottom.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+        self.open_file_btn = ttk.Button(
+            act, text="Открыть файл", style="Ghost.TButton",
+            command=self.on_open_result, state="disabled",
+        )
+        self.open_file_btn.pack(side="left", padx=(10, 0))
+        self.open_folder_btn = ttk.Button(
+            act, text="Открыть папку", style="Ghost.TButton",
+            command=self.on_open_folder, state="disabled",
+        )
+        self.open_folder_btn.pack(side="left", padx=(8, 0))
 
-        table_wrap = ttk.Frame(bottom)
-        table_wrap.pack(fill="both", expand=True, padx=8, pady=8)
+        # --- шаг 3: предпросмотр результата вместо журнала
+        bottom = self._card(body, "ШАГ 3 · Результат (таблица)")
+        bottom.pack_configure(fill="both", expand=True)
+
+        table_wrap = ttk.Frame(bottom, style="Card.TFrame")
+        table_wrap.pack(fill="both", expand=True, padx=14, pady=(10, 6))
 
         self._setup_table_style()
         # рамка вокруг таблицы не зависит от темы оформления Windows
         grid_box = tk.Frame(
             table_wrap, bd=1, relief="solid", highlightthickness=0,
-            background=GRID_COLOR,
+            background=BORDER,
         )
         grid_box.pack(fill="both", expand=True)
         self.preview = ttk.Treeview(
@@ -219,8 +277,8 @@ class KonvektorApp(_Base):
             selectmode="browse",
         )
         # «разлиновка»: чередование строк, как в Excel
-        self.preview.tag_configure("odd", background="#F2F6FB")
-        self.preview.tag_configure("even", background="#FFFFFF")
+        self.preview.tag_configure("odd", background=ROW_ODD)
+        self.preview.tag_configure("even", background=CARD)
         for title, width, min_width in zip(
             PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS
         ):
@@ -242,9 +300,115 @@ class KonvektorApp(_Base):
         self.preview.pack(side="left", fill="both", expand=True)
 
         self.hint_var = tk.StringVar(value="")
-        ttk.Label(bottom, textvariable=self.hint_var, foreground="#555555").pack(
-            anchor="w", padx=8, pady=(0, 6)
-        )
+        ttk.Label(
+            bottom, textvariable=self.hint_var, style="Hint.TLabel"
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        self._clear_preview()
+
+    def _card(self, parent, title: str):
+        """Белая карточка раздела с подписью-шагом."""
+        frame = ttk.LabelFrame(parent, text=title, style="Card.TLabelframe")
+        frame.pack(fill="x", pady=(0, 10))
+        return frame
+
+    def _header_icon(self, parent):
+        """Иконка в шапке (та же, что у .exe). Если картинки нет — просто пропускаем."""
+        image = getattr(self, "_icon_image", None)
+        if image is None:
+            return None
+        try:
+            # исходник 256×256 — для шапки берём 64×64
+            self._icon_header = image.subsample(4, 4)
+            return tk.Label(parent, image=self._icon_header, background=NAVY, bd=0)
+        except Exception:  # noqa: BLE001 - иконка не критична
+            return None
+
+    def _setup_theme(self) -> None:
+        """Единое оформление: шрифты, цвета, кнопки, карточки."""
+        try:
+            style = ttk.Style(self)
+            if "clam" in style.theme_names():
+                # clam позволяет задавать цвета кнопок и рамок (vista их игнорирует)
+                style.theme_use("clam")
+            style.configure(
+                ".", background=BG, foreground=TEXT, font=("Segoe UI", 10)
+            )
+            style.configure("Card.TFrame", background=CARD)
+            style.configure("Card.TLabel", background=CARD, foreground=TEXT)
+            style.configure(
+                "Card.TLabelframe",
+                background=CARD,
+                bordercolor=BORDER,
+                relief="solid",
+                borderwidth=1,
+            )
+            style.configure(
+                "Card.TLabelframe.Label",
+                background=BG,
+                foreground=NAVY,
+                font=("Segoe UI", 9, "bold"),
+            )
+            style.configure(
+                "Header.TLabel",
+                background=NAVY,
+                foreground="#FFFFFF",
+                font=("Segoe UI", 16, "bold"),
+            )
+            style.configure(
+                "HeaderSub.TLabel",
+                background=NAVY,
+                foreground="#BFD0E6",
+                font=("Segoe UI", 9),
+            )
+            style.configure(
+                "HeaderVer.TLabel",
+                background=NAVY,
+                foreground="#8FA9C8",
+                font=("Segoe UI", 8),
+            )
+            style.configure(
+                "File.TLabel",
+                background=CARD,
+                foreground=TEXT,
+                font=("Segoe UI", 11, "bold"),
+            )
+            style.configure("Hint.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
+            style.configure(
+                "Primary.TButton",
+                font=("Segoe UI", 10, "bold"),
+                padding=(20, 9),
+                background=ACCENT,
+                foreground="#FFFFFF",
+                borderwidth=0,
+            )
+            style.map(
+                "Primary.TButton",
+                background=[("disabled", "#B9C7DA"), ("active", ACCENT_DARK)],
+                foreground=[("disabled", "#F0F4FA")],
+            )
+            style.configure(
+                "Secondary.TButton",
+                font=("Segoe UI", 10),
+                padding=(16, 8),
+                background=CARD,
+                foreground=NAVY,
+                bordercolor=BORDER,
+            )
+            style.map("Secondary.TButton", background=[("active", "#E8EEF8")])
+            style.configure(
+                "Ghost.TButton",
+                font=("Segoe UI", 9),
+                padding=(12, 7),
+                background=BG,
+                foreground=MUTED,
+                borderwidth=0,
+            )
+            style.map("Ghost.TButton", background=[("active", "#E6ECF5")])
+            style.configure("Path.TEntry", padding=(6, 5), fieldbackground=CARD)
+            style.configure("TSeparator", background=BORDER)
+        except Exception:  # noqa: BLE001 - оформление не должно ломать окно
+            pass
 
     def _setup_table_style(self) -> None:
         """Разлиновка таблицы: подсветка строк через одну, объёмная шапка, высота строк."""
@@ -332,6 +496,8 @@ class KonvektorApp(_Base):
         self._pending_source = path
         self._pending_out = folder
         self._pending_result = None
+        self.open_file_btn.configure(state="disabled")
+        self.open_folder_btn.configure(state="disabled")
         self.hint_var.set("")
         self._log_clear()
         self._clear_preview()
@@ -386,6 +552,35 @@ class KonvektorApp(_Base):
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
 
+    def on_open_result(self) -> None:
+        """Открыть сохранённый файл в Excel (или чем он открыт в системе)."""
+        path = self._last_outputs[0] if self._last_outputs else ""
+        if not path or not os.path.exists(path):
+            messagebox.showinfo(APP_NAME, "Сначала нажмите «Сохранить» — файла ещё нет.")
+            return
+        self._open_path(path)
+
+    def on_open_folder(self) -> None:
+        """Открыть папку, в которую сохранён результат."""
+        path = self._last_outputs[0] if self._last_outputs else ""
+        folder = os.path.dirname(path) if path else (self.output_dir() or documents_dir())
+        if not os.path.isdir(folder):
+            messagebox.showinfo(APP_NAME, "Папки пока нет — она появится после сохранения.")
+            return
+        self._open_path(folder)
+
+    @staticmethod
+    def _open_path(path: str) -> None:
+        """Открыть файл или папку средствами системы (Windows: os.startfile)."""
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(path)  # type: ignore[attr-defined]  # только Windows
+                return
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, path])  # noqa: S603,S607 - путь наш, не из сети
+        except Exception as exc:  # noqa: BLE001 - не критично для работы
+            messagebox.showinfo(APP_NAME, f"Не удалось открыть:\n{path}\n\n{exc}")
+
     def _saved(self, result: ConvertResult) -> None:
         self._running = False
         self.run_btn.configure(state="normal")
@@ -397,6 +592,8 @@ class KonvektorApp(_Base):
         written = result.outputs[0]
         folder, name = os.path.split(written)
         self.hint_var.set(f"Сохранено: {folder} / {name}")
+        self.open_file_btn.configure(state="normal")
+        self.open_folder_btn.configure(state="normal")
         messagebox.showinfo(APP_NAME, f"Файл сохранён:\n{written}")
 
     def _poll_queue(self) -> None:

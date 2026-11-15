@@ -21,6 +21,8 @@
 (см. `.github/workflows/build.yml`). Файлы для Windows собираются на `windows-latest`
 через PyInstaller, поэтому `.exe` всегда соответствует текущему коду.
 
+![Окно программы](docs/screenshots/Окно_1.4.0.png)
+
 ## Как пользоваться
 
 1. Запустить `Konvektor.exe`.

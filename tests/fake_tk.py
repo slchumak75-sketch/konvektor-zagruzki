@@ -31,6 +31,22 @@ class Widget:
     def place(self, *a, **k):
         return self
 
+    def pack_propagate(self, *a, **k):
+        return None
+
+    def grid_propagate(self, *a, **k):
+        return None
+
+    def pack_configure(self, *a, **k):
+        self.options.update(k)
+        return None
+
+    def columnconfigure(self, *a, **k):
+        return None
+
+    def rowconfigure(self, *a, **k):
+        return None
+
     def configure(self, *a, **k):
         self.options.update(k)
         return None
@@ -93,7 +109,11 @@ class Tk(Widget):
 
 
 class Frame(Widget):
-    """Рамка: используется для видимой границы вокруг таблицы."""
+    """Рамка: используется для видимой границы вокруг таблицы и шапки окна."""
+
+
+class Label(Widget):
+    """Надпись (tk.Label): шапка окна, иконка."""
 
 
 class Listbox(Widget):
@@ -322,6 +342,7 @@ def install() -> types.ModuleType:
         Widget,
         Tk,
         Frame,
+        Label,
         Listbox,
         Text,
         Variable,
