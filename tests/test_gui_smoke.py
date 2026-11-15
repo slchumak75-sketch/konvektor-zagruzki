@@ -124,17 +124,56 @@ def test_no_status_field_and_no_progressbar(gui, known_paths):
     assert app.hint_var.get().startswith("Файл выбран")
 
 
-def test_explicit_output_path_is_used(gui, tmp_path):
+def test_output_field_is_folder_and_name_is_supplier_date(gui, tmp_path):
+    """В поле — только папка: имя файла всегда «поставщик дата.xlsx»."""
     app, _, _ = gui
-    target = tmp_path / "свой.xlsx"
-    app.out_var.set(str(target))
+    folder = tmp_path / "выбранная папка"
+    app.out_var.set(str(folder))
     app.on_convert()
     _run(app)
-    assert not target.exists()  # конвертация ничего не пишет
+    assert not folder.exists() or list(folder.iterdir()) == []  # ничего не пишем
+    expected = str(folder / "ООО ОМА 19.10.2026.xlsx")
+    assert app._pending_result.planned_output == expected
     app.on_save()
     _run(app)
-    assert target.exists()
-    assert app._last_outputs == [str(target)]
+    assert [p.name for p in folder.iterdir()] == ["ООО ОМА 19.10.2026.xlsx"]
+    assert app._last_outputs == [expected]
+
+
+def test_file_path_in_folder_field_still_gives_supplier_date_name(gui, tmp_path):
+    """Даже если вставить полный путь к файлу, «Результат.xlsx» не появится."""
+    app, _, _ = gui
+    folder = tmp_path / "вставленный путь"
+    app.out_var.set(str(folder / "Результат.xlsx"))
+    assert app.output_dir() == str(folder)
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    _run(app)
+    names = [p.name for p in folder.iterdir()]
+    assert names == ["ООО ОМА 19.10.2026.xlsx"], names
+
+
+def test_quantity_and_vat_have_no_decimal_comma(gui):
+    """В «количество» и «ставке НДС» лишней запятой нет: 5, а не 5,00; 20, а не 20,00."""
+    app, _, _ = gui
+    assert app._fmt(5.0, "количество") == "5"
+    assert app._fmt(12.0, "количество") == "12"
+    assert app._fmt(0.5, "количество") == "0,5"
+    assert app._fmt(20.0, "ставка НДС") == "20"
+    assert app._fmt(10.0, "ставка НДС") == "10"
+    # деньги остаются с копейками
+    assert app._fmt(2.5, "цена") == "2,50"
+    assert app._fmt(15.47, "сумма с НДС") == "15,47"
+
+    app.on_convert()
+    _run(app)
+    rows = [row[1] for row in app.preview.rows]
+    quantities = [r[4] for r in rows if r[4]]
+    rates = {r[7] for r in rows if r[7]}
+    assert quantities and rates
+    assert not any(q.endswith(",00") for q in quantities), quantities
+    assert all("," not in rate for rate in rates), rates
 
 
 def test_save_button_is_disabled_until_conversion(gui):

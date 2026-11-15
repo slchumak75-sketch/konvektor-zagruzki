@@ -39,7 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Пример: Konvektor-cli.exe счет.xls ТТН.xlsx -o Загрузка.xlsx",
     )
     p.add_argument("files", nargs="*", help="файлы и/или папки для конвертации")
-    p.add_argument("-o", "--output", help="путь к итоговому .xlsx (по умолчанию рядом с первым файлом)")
+    p.add_argument(
+        "-o",
+        "--output",
+        help="папка для результата (имя файла всегда «поставщик дата.xlsx»; "
+        "по умолчанию — папка «Документы»)",
+    )
     p.add_argument(
         "-m",
         "--mode",
@@ -115,15 +120,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif not os.path.exists(f):
             print(f"пропущен (файл не найден): {f}", file=sys.stderr)
 
+    # -o — это папка: имя файла всегда «поставщик дата.xlsx», иначе легко
+    # получить безликое «Результат.xlsx». Если передали путь к .xlsx, берём его папку.
     out = args.output or ""
+    if os.path.splitext(out)[1].lower() in (".xlsx", ".xlsm", ".xls"):
+        out = os.path.dirname(out)
     options = ConvertOptions(
         mode=args.mode,
         validate=not args.no_validate,
-        # без -o результат раскладывается как «поставщик/дата.xlsx»
-        naming="path" if out else "auto",
+        # раскладываем как «<папка>/поставщик дата.xlsx»
+        naming="auto",
+        output_dir=out,
         add_source_columns=args.source_columns,
     )
-    result = convert(files, out, options, log=log, recursive=args.recursive)
+    result = convert(files, "", options, log=log, recursive=args.recursive)
 
     if args.json:
         payload = {

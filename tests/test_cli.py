@@ -87,3 +87,21 @@ def test_json_contains_analysis(known_paths, tmp_path, capsys):
     assert analysis["coverage"].endswith("/10")
     assert analysis["quality"] in ("высокое", "среднее", "низкое")
     assert analysis["blocks"][0]["header_row"] == 10
+
+
+def test_output_is_folder_and_name_is_supplier_date(known_paths, tmp_path, capsys):
+    """-o — это папка: имя файла всегда «поставщик дата.xlsx», а не «Результат.xlsx»."""
+    path = _known(known_paths, "Кореличи")
+    if path is None:
+        pytest.skip("нет файла-образца")
+    # вариант 1: указали папку
+    assert main([str(path), "-o", str(tmp_path), "--json", "-q"]) == 0
+    payload = _first_json(capsys.readouterr().out)
+    expected = str(tmp_path / "ООО ОМА 19.10.2026.xlsx")
+    assert payload["outputs"] == [expected], payload["outputs"]
+    # вариант 2: по привычке указали путь к файлу — имя всё равно своё
+    other = tmp_path / "вторая"
+    other.mkdir()
+    assert main([str(path), "-o", str(other / "Результат.xlsx"), "--json", "-q"]) == 0
+    payload = _first_json(capsys.readouterr().out)
+    assert payload["outputs"] == [str(other / "ООО ОМА 19.10.2026.xlsx")]

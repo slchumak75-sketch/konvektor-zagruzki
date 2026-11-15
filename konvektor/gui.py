@@ -31,6 +31,7 @@ from .pipeline import (
     ConvertOptions,
     ConvertResult,
     convert,
+    documents_dir,
     is_supported,
 )
 
@@ -80,6 +81,10 @@ PREVIEW_MIN_WIDTHS = [90, 70, 160, 55, 60, 70, 80, 60, 80, 90]
 GRID_COLOR = "#9DB2C8"
 #: Числовые колонки выравниваем по правому краю, как в Excel.
 _NUMERIC_PREVIEW = {"количество", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС"}
+#: Деньги — всегда две цифры после запятой.
+_MONEY_PREVIEW = {"цена", "сумма", "сумма НДС", "сумма с НДС"}
+#: Количество и ставка НДС — целые, если дробной части нет (5, а не 5,00; 20, а не 20,00).
+_WHOLE_PREVIEW = {"количество", "ставка НДС"}
 
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
@@ -156,7 +161,7 @@ class KonvektorApp(_Base):
 
         row1 = ttk.Frame(mid)
         row1.pack(fill="x", padx=8, pady=(8, 2))
-        ttk.Label(row1, text="Итоговый файл:").pack(side="left")
+        ttk.Label(row1, text="Папка:").pack(side="left")
         self.out_var = tk.StringVar(value="")
         ttk.Entry(row1, textvariable=self.out_var).pack(
             side="left", fill="x", expand=True, padx=6
@@ -165,9 +170,12 @@ class KonvektorApp(_Base):
 
         ttk.Label(
             mid,
-            text="Пусто — сохранить в папку «Документы» с именем "
-            "«поставщик дата документа.xlsx».",
+            text="Имя файла задавать не нужно: он всегда называется "
+            "«поставщик дата документа.xlsx» (например, «ООО ОМА 19.10.2026.xlsx»). "
+            "Пусто — папка «Документы».",
             foreground="#555555",
+            wraplength=1040,
+            justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
         # --- действие
@@ -265,17 +273,28 @@ class KonvektorApp(_Base):
             self._add_files([path])
 
     def on_browse_output(self) -> None:
-        initial = self.out_var.get()
-        folder = os.path.dirname(initial) or os.path.dirname(self.files[0] if self.files else "") or os.getcwd()
-        path = filedialog.asksaveasfilename(
-            title="Куда сохранить результат",
-            defaultextension=".xlsx",
-            initialfile=os.path.basename(initial) or "Результат.xlsx",
-            initialdir=folder,
-            filetypes=[("Excel (*.xlsx)", "*.xlsx")],
+        """Выбираем только папку: имя файла программа задаёт сама."""
+        folder = self.output_dir()
+        if not os.path.isdir(folder):
+            folder = documents_dir()
+        path = filedialog.askdirectory(
+            title="Куда сохранять результат", initialdir=folder, mustexist=False
         )
         if path:
-            self.out_var.set(path)
+            self.out_var.set(os.path.normpath(path))
+
+    def output_dir(self) -> str:
+        """Папка сохранения из поля «Папка» (пустая строка — «Документы»).
+
+        Если пользователь вставил полный путь к файлу (старая привычка),
+        берём папку из него: имя всё равно будет «поставщик дата.xlsx».
+        """
+        value = self.out_var.get().strip().strip('"')
+        if not value:
+            return ""
+        if os.path.splitext(value)[1].lower() in (".xlsx", ".xls", ".xlsm", ".csv"):
+            value = os.path.dirname(value)
+        return value
 
     # ------------------------------------------------------------ конвертация
     def on_convert(self) -> None:
@@ -286,13 +305,14 @@ class KonvektorApp(_Base):
             return
 
         path = self.files[0]
-        out = self.out_var.get().strip()
+        folder = self.output_dir()
         options = ConvertOptions(
             mode=MODE_COMBINED,
             # колонки «файл» и «строка» нужны всегда (в сохранённом файле)
             add_source_columns=True,
-            # без явного пути — «Документы/поставщик дата.xlsx»
-            naming="path" if out else "auto",
+            # имя всегда «поставщик дата.xlsx» — в выбранной папке или «Документах»
+            naming="auto",
+            output_dir=folder,
             # «Конвертировать» только показывает таблицу; пишет «Сохранить»
             write=False,
         )
@@ -301,7 +321,7 @@ class KonvektorApp(_Base):
         self.run_btn.configure(state="disabled")
         self.save_btn.configure(state="disabled")
         self._pending_source = path
-        self._pending_out = out
+        self._pending_out = folder
         self._pending_result = None
         self.hint_var.set("")
         self._log_clear()
@@ -311,7 +331,7 @@ class KonvektorApp(_Base):
 
         def worker() -> None:
             try:
-                result = convert([path], out, options, log=lambda m: self._queue.put(("log", m)))
+                result = convert([path], folder, options, log=lambda m: self._queue.put(("log", m)))
                 self._queue.put(("done", result))
             except Exception as exc:  # noqa: BLE001 - показываем пользователю
                 self._queue.put(("error", (exc, traceback.format_exc())))
@@ -334,11 +354,12 @@ class KonvektorApp(_Base):
             )
             return
 
-        out = (self._pending_out or self.out_var.get()).strip()
+        folder = self._pending_out or self.output_dir()
         options = ConvertOptions(
             mode=MODE_COMBINED,
             add_source_columns=True,
-            naming="path" if out else "auto",
+            naming="auto",
+            output_dir=folder,
             write=True,
         )
 
@@ -348,7 +369,7 @@ class KonvektorApp(_Base):
 
         def worker() -> None:
             try:
-                result = convert([path], out, options, log=lambda m: self._queue.put(("log", m)))
+                result = convert([path], folder, options, log=lambda m: self._queue.put(("log", m)))
                 self._queue.put(("saved", result))
             except Exception as exc:  # noqa: BLE001 - показываем пользователю
                 self._queue.put(("error", (exc, traceback.format_exc())))
@@ -474,18 +495,31 @@ class KonvektorApp(_Base):
                 item.sum_with_vat,
             ]
             tag = "odd" if len(self.preview.get_children()) % 2 else "even"
-            self.preview.insert(
-                "", "end", values=[self._fmt(v) for v in values], tags=(tag,)
-            )
+            cells = [
+                self._fmt(value, title)
+                for value, title in zip(values, PREVIEW_COLUMNS)
+            ]
+            self.preview.insert("", "end", values=cells, tags=(tag,))
         if not items:
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
 
     @staticmethod
-    def _fmt(value) -> str:
+    def _fmt(value, column: str = "") -> str:
+        """Как число будет выглядеть в Excel: деньги — 2 знака, количество — без нулей."""
         if value is None:
             return ""
+        if isinstance(value, bool):
+            return str(value).lower()
+        if isinstance(value, int):
+            return str(value)
         if isinstance(value, float):
-            return f"{value:.2f}".replace(".", ",")
+            if column in _WHOLE_PREVIEW:
+                if value.is_integer():
+                    return str(int(value))
+                return f"{value:.3f}".rstrip("0").rstrip(".").replace(".", ",")
+            if column in _MONEY_PREVIEW:
+                return f"{value:.2f}".replace(".", ",")
+            return f"{value:.2f}".rstrip("0").rstrip(".").replace(".", ",")
         return str(value)
 
     def _clear_preview(self) -> None:
@@ -501,7 +535,6 @@ class KonvektorApp(_Base):
                 continue
             self.files = [full]
             self.file_var.set(os.path.basename(full))
-            self.out_var.set("")
             self.hint_var.set("")
             self._log(f"выбран файл: {full}")
             break
@@ -510,7 +543,6 @@ class KonvektorApp(_Base):
     def _clear_files(self) -> None:
         self.files.clear()
         self.file_var.set("файл не выбран")
-        self.out_var.set("")
         self._update_status()
 
     def _update_status(self) -> None:
