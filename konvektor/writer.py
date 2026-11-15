@@ -66,6 +66,19 @@ class FileStat:
     warnings: int = 0
     computed: int = 0
     vat_mode: str = ""
+    #: реквизиты документа, прочитанные из файла (konvektor/meta.py)
+    supplier: str = ""
+    supplier_unp: str = ""
+    doc_type: str = ""
+    doc_number: str = ""
+    doc_date: str = ""
+    meta_warnings: List[str] = field(default_factory=list)
+
+    @property
+    def doc_label(self) -> str:
+        """«Счет № 542» — тип и номер документа одной строкой."""
+        parts = [self.doc_type, f"№ {self.doc_number}" if self.doc_number else ""]
+        return " ".join(p for p in parts if p).strip()
 
 
 @dataclass
@@ -245,6 +258,10 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
         "Файл",
         "Формат",
         "Лист(ы)",
+        "Поставщик",
+        "УНП поставщика",
+        "Документ",
+        "Дата документа",
         "Позиций",
         "Сумма",
         "Сумма НДС",
@@ -254,7 +271,7 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
         "Рассчитано значений",
         "Цены",
     ]
-    widths = [46, 9, 26, 10, 15, 15, 16, 9, 15, 20, 26]
+    widths = [46, 9, 26, 38, 15, 26, 14, 10, 15, 15, 16, 9, 15, 20, 26]
     _write_header(ws, 1, headers)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -265,6 +282,10 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
             st.path,
             st.reader,
             st.sheets,
+            st.supplier or "— не найден",
+            st.supplier_unp,
+            st.doc_label or "—",
+            st.doc_date or "—",
             st.items,
             st.sum_without_vat,
             st.vat_sum,
@@ -275,19 +296,21 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
             MODE_TITLES.get(st.vat_mode, st.vat_mode),
         ]
         for c, val in enumerate(values, start=1):
-            cell = ws.cell(row=r, column=c, value=val)
+            cell = ws.cell(row=r, column=c, value=val if val != "" else None)
             cell.border = BORDER
-            cell.alignment = WRAP_TOP if c in (1, 3, 11) else CENTER_TOP
-            if c in (5, 6, 7):
+            cell.alignment = WRAP_TOP if c in (1, 3, 4, 6, 15) else CENTER_TOP
+            if c in (9, 10, 11):
                 cell.number_format = MONEY_FMT
+            if c in (5, 7):
+                cell.number_format = "@"
         r += 1
 
     # итог
     if payload.stats:
         cell = ws.cell(row=r, column=1, value="ВСЕГО")
         cell.font = Font(bold=True)
-        ws.cell(row=r, column=4, value=sum(s.items for s in payload.stats)).font = Font(bold=True)
-        for col, attr in ((5, "sum_without_vat"), (6, "vat_sum"), (7, "sum_with_vat")):
+        ws.cell(row=r, column=8, value=sum(s.items for s in payload.stats)).font = Font(bold=True)
+        for col, attr in ((9, "sum_without_vat"), (10, "vat_sum"), (11, "sum_with_vat")):
             c = ws.cell(row=r, column=col, value=round(sum(getattr(s, attr) for s in payload.stats), 2))
             c.font = Font(bold=True)
             c.number_format = MONEY_FMT
@@ -303,6 +326,7 @@ def _write_summary_sheet(ws: Worksheet, payload: WorkbookPayload) -> None:
         ("Проверки", "сумма = кол-во × цена; сумма с НДС = сумма + НДС; НДС = сумма × ставка"),
         ("Жёлтая заливка", "значение рассчитано программой (в документе отсутствовало)"),
         ("Лист «Проверки»", "все расхождения, предупреждения и расчёты"),
+        ("Поставщик и дата", "прочитаны из файла поставщика (см. столбцы «Поставщик» и «Дата документа»)"),
     ]
     for title, text in info:
         ws.cell(row=r, column=1, value=title).font = Font(bold=True)

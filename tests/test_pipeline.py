@@ -64,11 +64,39 @@ def test_summary_sheet(combined):
     ws = load_workbook(path)["Сводка"]
     rows = list(ws.iter_rows(values_only=True))
     assert rows[0][0] == "Файл"
-    files = [r[0] for r in rows[1:] if r[0] and r[3] is not None and r[0] != "ВСЕГО"]
+    # столбцы: Файл, Формат, Лист(ы), Поставщик, УНП, Документ, Дата, Позиций, …
+    assert rows[0][3] == "Поставщик"
+    assert rows[0][5] == "Документ"
+    assert rows[0][6] == "Дата документа"
+    files = [r[0] for r in rows[1:] if r[0] and r[7] is not None and r[0] != "ВСЕГО"]
     assert len(files) == 10
     total = next(r for r in rows if r[0] == "ВСЕГО")
-    assert total[3] == 301
-    assert round(total[6], 2) == pytest.approx(16579.02, abs=0.01)
+    assert total[7] == 301
+    assert round(total[10], 2) == pytest.approx(16579.02, abs=0.01)
+
+
+def test_summary_sheet_has_supplier_and_date(combined):
+    """Поставщик и дата документа выгружаются в «Сводку» по каждому файлу."""
+    _, path = combined
+    ws = load_workbook(path)["Сводка"]
+    rows = {r[0]: r for r in ws.iter_rows(min_row=2, values_only=True) if r[0]}
+    row = next(v for k, v in rows.items() if k.endswith("_№ 10802 от 12 ноября 2026 г .XLS"))
+    assert row[3] == 'ООО "Культбытхозторгплюс"'
+    assert row[4] == "192553707"
+    assert row[5] == "Счет № 3596616"
+    assert row[6] == "12.11.2026"
+
+
+def test_result_metas(combined):
+    result, _ = combined
+    assert len(result.metas) == 10
+    by_name = {os.path.basename(p): m for p, m in result.metas.items()}
+    assert by_name["Кореличи (4).xls"].supplier == 'ООО "ОМА"'
+    assert by_name["Кореличи (4).xls"].date_text == "19.10.2026"
+    stat = next(s for s in result.stats if s.path.endswith("Кореличи (4).xls"))
+    assert stat.supplier == 'ООО "ОМА"'
+    assert stat.doc_date == "19.10.2026"
+    assert stat.doc_number == "11121-000020449"
 
 
 def test_issues_sheet_marks_computed(combined):

@@ -16,6 +16,7 @@ from .pipeline import (
     ConvertOptions,
     convert,
     default_output_name,
+    diagnose,
     is_supported,
     selftest,
 )
@@ -53,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     p.add_argument(
+        "--diagnose",
+        metavar="ФАЙЛ",
+        help="подробно разобрать один файл (почему не читается, что найдено)",
+    )
+    p.add_argument(
         "--selftest",
         nargs="?",
         const=".",
@@ -71,6 +77,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.selftest is not None:
         ok, msg = selftest(args.selftest, log=log)
         print(("САМОПРОВЕРКА: OK — " if ok else "САМОПРОВЕРКА: FAIL — ") + msg)
+        return 0 if ok else 1
+
+    if args.diagnose:
+        ok, lines = diagnose(args.diagnose, log=lambda m: None)
+        for line in lines:
+            print(line)
         return 0 if ok else 1
 
     if not args.files:
@@ -108,6 +120,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for i in (result.report.warnings if result.report else [])
             ],
             "computed": result.computed_count,
+            "documents": [
+                {
+                    "file": path,
+                    "supplier": meta.supplier,
+                    "supplier_unp": meta.supplier_unp,
+                    "doc_type": meta.doc_type,
+                    "doc_number": meta.doc_number,
+                    "doc_date": meta.date_text,
+                    "origin": meta.origin,
+                    "warnings": meta.warnings,
+                }
+                for path, meta in result.metas.items()
+            ],
             "stats": [
                 {
                     "file": s.path,

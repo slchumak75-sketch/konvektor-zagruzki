@@ -20,7 +20,7 @@ python -m pytest tests/test_samples.py -v
 python -m pytest -k barcode        # по имени
 ```
 
-187 тестов. Они работают **на реальных файлах-образцах из корня репозитория**:
+246 тестов. Они работают **на реальных файлах-образцах из корня репозитория**:
 
 | Файл тестов | Что проверяет |
 |---|---|
@@ -29,7 +29,9 @@ python -m pytest -k barcode        # по имени
 | `tests/test_readers.py` | формат по магическим байтам, cp1251, повреждённый xls, HTML/CSV, xlsx в .xls |
 | `tests/test_samples.py` | по каждому образцу: число позиций, наличие полей, штрихкоды, артикулы, отсутствие расхождений |
 | `tests/test_validate.py` | арифметические проверки, режимы НДС, достройку значений, сверку итогов |
-| `tests/test_pipeline.py` | сквозной прогон, структура книги, режимы, битые файлы, `--selftest` |
+| `tests/test_pipeline.py` | сквозной прогон, структура книги, режимы, битые файлы, `--selftest`, столбцы «Сводки» с поставщиком и датой |
+| `tests/test_meta.py` | поставщик/УНП/тип/номер/дата документа, `parse_date`, имя файла, таблица `EXPECTED` по всем 10 образцам |
+| `tests/test_cli.py` | `--json` (массив `documents`) и `--diagnose` (хороший, отсутствующий, битый файл) |
 | `tests/test_gui_smoke.py` | логика окна на заглушке tkinter (файлы, конвертация в потоке, журнал) |
 
 Важные числа-«замки» (при их изменении нужно осознанно обновить тесты):
@@ -55,6 +57,7 @@ pyinstaller --noconfirm --onefile --console --name Konvektor-cli \
 
 dist\Konvektor.exe            # оконная версия
 dist\Konvektor-cli.exe --selftest .
+dist\Konvektor-cli.exe --diagnose "файл.XLS"   # проверка режима разбора
 ```
 
 На Linux PyInstaller соберёт бинарник, но **не** `.exe` — Windows-сборка делается

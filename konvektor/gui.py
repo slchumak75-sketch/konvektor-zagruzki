@@ -300,6 +300,13 @@ class KonvektorApp(_Base):
         self._last_outputs = list(result.outputs)
 
         self._log("")
+        for path, meta in result.metas.items():
+            self._log(f"Документ: {os.path.basename(path)}")
+            self._log(f"  поставщик: {meta.supplier or '— не найден'}"
+                      + (f" (УНП {meta.supplier_unp})" if meta.supplier_unp else ""))
+            self._log(f"  документ: {meta.doc_label or '— не определён'}"
+                      + (f", дата: {meta.date_text}" if meta.doc_date else ", дата не найдена"))
+        self._log("")
         self._log(
             f"Позиций: {result.items_count}; ошибок: {result.error_count}; "
             f"предупреждений: {result.warning_count}; рассчитано значений: {result.computed_count}"
@@ -313,9 +320,16 @@ class KonvektorApp(_Base):
         self.status.configure(text=f"Готово: {result.items_count} позиций")
 
         if result.items_count:
+            docs = "\n".join(
+                f"  {os.path.basename(p)}: {m.supplier or 'поставщик не найден'}"
+                + (f", {m.doc_label}" if m.doc_number else "")
+                + (f" от {m.date_text}" if m.doc_date else "")
+                for p, m in result.metas.items()
+            )
             text = (
                 f"Готово.\n\nПозиций: {result.items_count}\n"
-                f"Расхождений в суммах: {result.error_count}\n"
+                + (f"Документы:\n{docs}\n\n" if docs else "")
+                + f"Расхождений в суммах: {result.error_count}\n"
                 f"Предупреждений: {result.warning_count}\n"
                 f"Значений рассчитано программой: {result.computed_count}\n\n"
                 + "\n".join(result.outputs)

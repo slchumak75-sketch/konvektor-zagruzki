@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .extract import Item, extract_file
+from .meta import DocMeta, extract_meta, fmt_date
 from .readers import read_source
 from .validate import ValidationReport, check_document_totals, validate_items
 from .writer import FileStat, WorkbookPayload, write_workbook
@@ -64,6 +65,8 @@ class ConvertResult:
     stats: List[FileStat] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    #: реквизиты по каждому файлу: путь -> DocMeta (поставщик, документ, дата)
+    metas: Dict[str, DocMeta] = field(default_factory=dict)
 
     @property
     def items_count(self) -> int:
@@ -145,6 +148,7 @@ def convert(
     totals = []
     blocks: Dict[Tuple[str, str, int], List[Item]] = {}
     per_file_items: List[Tuple[str, List[Item]]] = []
+    metas: Dict[str, DocMeta] = {}
 
     for path in files:
         log(f"Читаю: {os.path.basename(path)}")
@@ -152,8 +156,16 @@ def convert(
             src = read_source(path)
             extracted = extract_file(src)
         except Exception as exc:  # noqa: BLE001 - один битый файл не должен рушить всё
-            msg = f"{os.path.basename(path)}: не удалось прочитать ({exc})"
+            msg = (
+                f"{os.path.basename(path)}: не удалось прочитать "
+                f"({type(exc).__name__}: {exc})"
+            )
             result.errors.append(msg)
+            result.notes.append(
+                f"{os.path.basename(path)}: подсказка — закройте файл в Excel и проверьте, "
+                "что это настоящий Excel; разбор файла: Konvektor-cli.exe --diagnose "
+                f"\"{os.path.basename(path)}\""
+            )
             log("  ! " + msg)
             if os.environ.get("KONVEKTOR_DEBUG"):
                 log(traceback.format_exc())
@@ -166,6 +178,18 @@ def convert(
         )
         for w in extracted.warnings:
             result.notes.append(w)
+            log("  ! " + w)
+
+        meta = extract_meta(src)
+        metas[path] = meta
+        result.metas[path] = meta
+        log(
+            f"  документ: {meta.doc_label or '—'}"
+            + (f" от {meta.date_text}" if meta.doc_date else "")
+            + f"; поставщик: {meta.supplier or '—'}"
+            + (f" (УНП {meta.supplier_unp})" if meta.supplier_unp else "")
+        )
+        for w in meta.warnings:
             log("  ! " + w)
 
         all_items.extend(extracted.items)
@@ -200,6 +224,14 @@ def convert(
         st.errors = sum(1 for i in report.issues if i.source == path and i.severity == "error")
         st.warnings = sum(1 for i in report.issues if i.source == path and i.severity == "warning")
         st.vat_mode = report.vat_mode.get(path, "")
+        meta = metas.get(path)
+        if meta is not None:
+            st.supplier = meta.supplier
+            st.supplier_unp = meta.supplier_unp
+            st.doc_type = meta.doc_type
+            st.doc_number = meta.doc_number
+            st.doc_date = fmt_date(meta.doc_date)
+            st.meta_warnings = list(meta.warnings)
         for note in result.notes:
             if note.startswith(os.path.basename(path) + ": листы"):
                 st.sheets = note.split("[", 1)[1].split("]", 1)[0]
@@ -263,6 +295,70 @@ def _unique_path(base_dir: str, stem: str, source: str) -> str:
 def default_output_name(directory: str = "") -> str:
     stamp = __import__("datetime").datetime.now().strftime("%Y-%m-%d_%H%M")
     return os.path.join(directory, f"Загрузка_{stamp}.xlsx")
+
+
+def diagnose(path: str, log: Logger = _noop) -> Tuple[bool, List[str]]:
+    """Подробный разбор одного файла: почему не читается / что нашлось.
+
+    Нужен, когда у пользователя файл «не конвертируется»: вывод можно
+    переслать разработчику как есть.
+    """
+    lines: List[str] = []
+
+    def say(text: str) -> None:
+        lines.append(text)
+        log(text)
+
+    say(f"Файл: {path}")
+    if not os.path.exists(path):
+        say("ОШИБКА: файл не найден по этому пути")
+        return False, lines
+    try:
+        say(f"Размер: {os.path.getsize(path)} байт")
+        say(f"Расширение: {os.path.splitext(path)[1] or '(нет)'}")
+        say(f"Поддерживается: {'да' if is_supported(path) else 'нет'}")
+    except OSError as exc:  # noqa: BLE001 - проблемы доступа к файлу
+        say(f"ОШИБКА доступа к файлу: {type(exc).__name__}: {exc}")
+        return False, lines
+
+    src = None
+    try:
+        src = read_source(path)
+    except Exception as exc:  # noqa: BLE001 - показываем пользователю причину
+        say(f"ОШИБКА чтения: {type(exc).__name__}: {exc}")
+        say("")
+        say("Возможные причины: файл открыт в Excel (закройте его), файл повреждён,")
+        say("это не настоящий Excel (например, HTML/CSV с чужим расширением),")
+        say("или формат новее, чем поддерживает программа.")
+        say("Подробности (traceback):")
+        for line in traceback.format_exc().splitlines():
+            say("  " + line)
+        return False, lines
+
+    try:
+        say(f"Прочитан как: {src.reader}; листов: {len(src.sheets)}")
+        for sheet in src.sheets[:10]:
+            cols = max((len(r) for r in sheet.rows), default=0)
+            say(f"  лист «{sheet.name}»: строк {len(sheet.rows)}, столбцов {cols}")
+        meta = extract_meta(src)
+        say(
+            "Реквизиты: поставщик "
+            f"{meta.supplier or '— не найден'}"
+            + (f" (УНП {meta.supplier_unp})" if meta.supplier_unp else "")
+            + f"; документ {meta.doc_label or '— не определён'}"
+            + (f" от {meta.date_text}" if meta.doc_date else ", дата не найдена")
+        )
+        extracted = extract_file(src)
+        say(f"Позиций найдено: {len(extracted.items)}")
+        for warn in extracted.warnings[:10]:
+            say("  ! " + warn)
+        say("Итог: файл читается" if extracted.items else "Итог: файл читается, но позиции не найдены")
+        return True, lines
+    except Exception as exc:  # noqa: BLE001 - разбор тоже может упасть
+        say(f"ОШИБКА разбора: {type(exc).__name__}: {exc}")
+        for line in traceback.format_exc().splitlines():
+            say("  " + line)
+        return False, lines
 
 
 def selftest(directory: str = ".", log: Logger = _noop) -> Tuple[bool, str]:

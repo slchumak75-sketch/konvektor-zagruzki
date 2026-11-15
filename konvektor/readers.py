@@ -168,13 +168,14 @@ def _read_xls(data: bytes) -> List[Sheet]:
             last_err = exc
             continue
         sheets: List[Sheet] = []
+        datemode = getattr(wb, "datemode", 0)
         for sh in wb.sheets():
             rows: List[List[Any]] = []
             for r in range(sh.nrows):
                 vals: List[Any] = []
                 for c in range(sh.ncols):
                     cell = sh.cell(r, c)
-                    vals.append(_xls_value(cell))
+                    vals.append(_xls_value(cell, datemode))
                 while vals and vals[-1] is None:
                     vals.pop()
                 rows.append(vals)
@@ -191,7 +192,7 @@ def _read_xls(data: bytes) -> List[Sheet]:
     raise ValueError("не удалось прочитать файл .xls")
 
 
-def _xls_value(cell) -> Any:
+def _xls_value(cell, datemode: int = 0) -> Any:
     import xlrd
 
     if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
@@ -201,7 +202,12 @@ def _xls_value(cell) -> Any:
         return int(v) if v.is_integer() and abs(v) < 1e15 else v
     if cell.ctype == xlrd.XL_CELL_BOOLEAN:
         return bool(cell.value)
-    if cell.ctype in (xlrd.XL_CELL_DATE, xlrd.XL_CELL_ERROR):
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            return xlrd.xldate.xldate_as_datetime(cell.value, datemode).date()
+        except Exception:  # noqa: BLE001 - битая дата в файле
+            return None
+    if cell.ctype == xlrd.XL_CELL_ERROR:
         return None
     return cell.value
 
