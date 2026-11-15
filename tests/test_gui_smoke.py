@@ -184,15 +184,22 @@ def test_quantity_and_vat_have_no_decimal_comma(gui):
     assert all("," not in rate for rate in rates), rates
 
 
-def test_path_field_only_no_buttons(gui):
-    """Одно поле пути, как в обычной программе Windows: никаких кнопок выбора."""
-    app, module, _ = gui
+def test_path_field_with_browse_button(gui, tmp_path):
+    """Обычное поле пути + кнопка «Обзор…»; других кнопок выбора нет."""
+    app, module, dialogs = gui
     # по умолчанию подставлена папка «Документы»
     assert app.out_var.get() == module.documents_dir()
-    # кнопок выбора папки больше нет
+    assert hasattr(app, "on_browse_output")
     assert not hasattr(app, "on_use_documents")
     assert not hasattr(app, "on_use_downloads")
-    assert not hasattr(app, "on_browse_output")
+
+    # «Обзор…» подставляет выбранную папку в то же поле
+    chosen = tmp_path / "выбранная"
+    chosen.mkdir()
+    dialogs.dir_result = str(chosen)
+    app.on_browse_output()
+    assert app.out_var.get() == str(chosen)
+    assert any(call[0] == "askdirectory" for call in dialogs.calls)
     # путь можно стереть — тогда «Документы»
     app.out_var.set("   ")
     assert app.output_dir() == ""

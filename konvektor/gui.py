@@ -169,11 +169,14 @@ class KonvektorApp(_Base):
         ttk.Entry(row1, textvariable=self.out_var).pack(
             side="left", fill="x", expand=True, padx=6
         )
+        # «Обзор…» — привычный выбор папки; поле остаётся обычным, текст можно
+        # вписать руками и стереть (тогда «Документы»)
+        ttk.Button(row1, text="Обзор…", command=self.on_browse_output).pack(side="left")
 
         ttk.Label(
             mid,
-            text="Укажите папку, куда класть результат. Пусто — папка «Документы». "
-            "Кнопки не нужны: путь можно вписать или вставить из проводника. "
+            text="Укажите папку, куда класть результат: впишите путь, вставьте его "
+            "из проводника или нажмите «Обзор…». Пусто — папка «Документы». "
             "Имя файла программа задаёт сама — «поставщик дата.xlsx» "
             "(например, «ООО ОМА 19.10.2026.xlsx»); если такой файл уже есть, "
             "новый сохранится как «ООО ОМА 19.10.2026 (2).xlsx» — "
@@ -276,6 +279,16 @@ class KonvektorApp(_Base):
         path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
         if path:
             self._add_files([path])
+
+    def on_browse_output(self) -> None:
+        """Выбрать папку в диалоге «Обзор…» (имя файла задаёт программа)."""
+        current = self.output_dir()
+        start = current if os.path.isdir(current) else documents_dir()
+        path = filedialog.askdirectory(
+            title="Куда сохранять результат", initialdir=start, mustexist=False
+        )
+        if path:
+            self.out_var.set(os.path.normpath(path))
 
     def output_dir(self) -> str:
         """Папка сохранения из поля «Путь» (пустая строка — «Документы»).
