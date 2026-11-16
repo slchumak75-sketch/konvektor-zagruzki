@@ -54,6 +54,9 @@ class SourceDialog:
             self.win.geometry("560x300")
             self.win.configure(background=BG)
             self.win.transient(master)
+            screen_h = self.win.winfo_screenheight()
+            if screen_h and screen_h > 200:
+                self.win.geometry(f"560x{screen_h - 80}+100+20")
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
 
