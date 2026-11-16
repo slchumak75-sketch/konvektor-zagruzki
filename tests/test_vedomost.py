@@ -228,7 +228,7 @@ def test_match_by_article():
     assert entry.matched
     assert entry.how == MATCH_ARTICLE
     assert entry.score == 1.0
-    assert entry.score_title == "точно"
+    assert entry.score_title == "Полное"
     assert doc.name == "Бита Impact торсионная ударная PH2 50мм"
 
 

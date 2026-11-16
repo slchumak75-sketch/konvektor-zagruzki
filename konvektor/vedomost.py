@@ -108,8 +108,8 @@ _LEGAL_FORMS = {
 _ROLE_ALIASES = OrderedDict(
     [
         ("nomenclature", ("номенклатура", "наименование", "название", "товар")),
-        ("article", ("артикул", "код", "артикул поставщика")),
-        ("barcode", ("штрихкод", "штрих код", "баркод", "ean", "штриховой код")),
+        ("article", ("артикул", "артикул поставщика")),
+        ("barcode", ("штрихкод", "штрих код", "код", "баркод", "ean", "штриховой код")),
         ("unit", ("ед", "единица", "единица измерения", "ед изм", "еденица")),
         ("supplier", ("последний поставщик", "поставщик", "контрагент")),
         ("group", ("группа номенклатуры", "группа", "категория", "вид номенклатуры")),
@@ -742,7 +742,7 @@ class MatchEntry:
         if not self.matched:
             return "—"
         if self.how in (MATCH_BARCODE, MATCH_ARTICLE) and self.score >= 1.0:
-            return "точно"
+            return "Полное"
         if self.how == HOW_MANUAL:
             return HOW_MANUAL
         return f"{self.score:.0%}"
