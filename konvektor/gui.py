@@ -1115,9 +1115,29 @@ class KonvektorApp(_Base):
                     try:
                         self.clipboard_clear()
                         self.clipboard_append(barcode)
+                        self.update()
                     except Exception:  # noqa: BLE001
                         pass
-                    self.hint_var.set(f"Штрихкод {barcode} скопирован в буфер обмена.")
+                    try:
+                        box = self.preview.bbox(row_id, "#1")
+                        if box:
+                            x, y, w, h = box
+                            flash = tk.Label(
+                                self.preview,
+                                text=barcode,
+                                background="#C8E6C9",
+                                foreground="#1B5E20",
+                                font=("Segoe UI", 11, "bold"),
+                                relief="solid",
+                                bd=1,
+                                anchor="w",
+                                padx=4,
+                            )
+                            flash.place(x=x, y=y, width=w, height=h)
+                            self.after(1000, flash.destroy)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.hint_var.set(f"✓ Штрихкод {barcode} скопирован в буфер обмена.")
             return
         if self._vedomost is None or self._matcher is None:
             return
