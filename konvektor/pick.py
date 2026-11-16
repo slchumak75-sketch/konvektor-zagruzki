@@ -84,13 +84,41 @@ class SourceDialog:
             self.sklad_buttons[name] = button
 
         ttk.Label(self.win, text="Поставщик:", style="Pick.TLabel").pack(anchor="w", **pad)
-        self.supplier_box = ttk.Combobox(
-            self.win,
-            textvariable=self.supplier_var,
-            values=[DOC_SUPPLIER] + self.suppliers,
-            state="readonly",
+        list_frame = ttk.Frame(self.win, style="Pick.TFrame")
+        list_frame.pack(fill="both", expand=True, pady=(2, 6), **pad)
+
+        canvas = tk.Canvas(list_frame, height=160, highlightthickness=1, highlightbackground="#C5D2E0", background=BG)
+        vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, style="Pick.TFrame")
+        inner.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
         )
-        self.supplier_box.pack(fill="x", pady=(2, 6), **pad)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        initial_set = {
+            s.strip() for s in (self.supplier_var.get() or "").split(",") if s.strip()
+        }
+        if not initial_set or DOC_SUPPLIER in initial_set:
+            initial_set = set()
+
+        self.supplier_vars: dict[str, tk.BooleanVar] = {}
+        self.supplier_checks: dict[str, ttk.Checkbutton] = {}
+        for name in [DOC_SUPPLIER] + self.suppliers:
+            checked = (name == DOC_SUPPLIER and not initial_set) or (name in initial_set)
+            var = tk.BooleanVar(value=checked)
+            cb = ttk.Checkbutton(
+                inner,
+                text=name,
+                variable=var,
+                command=lambda n=name: self._on_supplier_toggle(n),
+            )
+            cb.pack(anchor="w", padx=6, pady=2)
+            self.supplier_vars[name] = var
+            self.supplier_checks[name] = cb
         self.hint_label = ttk.Label(
             self.win,
             text=self._hint(),
@@ -124,11 +152,29 @@ class SourceDialog:
         )
 
     # ------------------------------------------------------------------ данные
+    def _on_supplier_toggle(self, name: str) -> None:
+        if name == DOC_SUPPLIER:
+            if self.supplier_vars[DOC_SUPPLIER].get():
+                for k, v in self.supplier_vars.items():
+                    if k != DOC_SUPPLIER:
+                        v.set(False)
+        else:
+            if self.supplier_vars[name].get():
+                self.supplier_vars[DOC_SUPPLIER].set(False)
+
     @property
     def supplier_value(self) -> str:
         """Выбранный поставщик (пустая строка — как в документе)."""
-        value = str(self.supplier_var.get() or "").strip()
-        return "" if value == DOC_SUPPLIER else value
+        if self.supplier_vars.get(DOC_SUPPLIER) and self.supplier_vars[DOC_SUPPLIER].get():
+            return ""
+        checked = [
+            name
+            for name, var in self.supplier_vars.items()
+            if name != DOC_SUPPLIER and var.get()
+        ]
+        if not checked:
+            return ""
+        return ", ".join(sorted(checked, key=str.casefold))
 
     @property
     def sklad_value(self) -> str:
