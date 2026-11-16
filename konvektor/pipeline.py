@@ -420,7 +420,31 @@ def convert(
                 )
             )
         elif not out_path:
-            out_path = unique_output_path(default_output_name(base_dir))
+            if options.supplier:
+                combined_supplier = options.supplier
+            else:
+                unique_suppliers = sorted(
+                    {
+                        m.supplier.strip()
+                        for p, _ in per_file_items
+                        if (m := metas.get(p)) and m.supplier and m.supplier.strip()
+                    },
+                    key=str.casefold,
+                )
+                combined_supplier = ", ".join(unique_suppliers)
+            if combined_supplier:
+                first_meta = metas.get(per_file_items[0][0])
+                out_path = unique_output_path(
+                    output_path_for(
+                        first_meta,
+                        base_dir,
+                        date=today,
+                        sklad=options.sklad,
+                        supplier=combined_supplier,
+                    )
+                )
+            else:
+                out_path = unique_output_path(default_output_name(base_dir))
         result.planned_output = out_path
         log(f"  файл результата: {out_path}")
     elif not out_path:
