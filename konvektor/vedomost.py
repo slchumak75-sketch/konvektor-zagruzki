@@ -129,9 +129,16 @@ Override = Optional[object]
 
 
 # --------------------------------------------------------------------- тексты
+_JUNK_PARENS = re.compile(r"\([^)]*(?:страна|пр-ва|произв|ввоз)[^)]*\)", re.IGNORECASE)
+_JUNK_BARCODE = re.compile(r"/\s*\d{8,14}\s*/|\b\d{8,14}\b")
+
+
 def norm_text(value: Any) -> str:
     """Привести текст к сравнимому виду: нижний регистр, без пунктуации и «ё»."""
-    s = to_text(value).lower().replace("ё", "е")
+    s = to_text(value)
+    s = _JUNK_PARENS.sub(" ", s)
+    s = _JUNK_BARCODE.sub(" ", s)
+    s = s.lower().replace("ё", "е")
     s = "".join(_LAT2CYR.get(ch, ch) for ch in s)
     s = _NON_WORD.sub(" ", s)
     return " ".join(s.split())
