@@ -225,14 +225,14 @@ class KonvektorApp(_Base):
     def _build_ui(self) -> None:
         self._setup_theme()
 
-        # --- шапка: иконка, название, подзаголовок
+        # --- шапка: иконка, название, подзаголовок + все кнопки действий
         header = tk.Frame(self, background=NAVY, height=76)
         header.pack(fill="x")
         header.pack_propagate(False)
 
         icon = self._header_icon(header)
         if icon is not None:
-            icon.pack(side="left", padx=(18, 12), pady=12)
+            icon.pack(side="left", padx=(14, 10), pady=12)
 
         titles = tk.Frame(header, background=NAVY)
         titles.pack(side="left", anchor="w", pady=12)
@@ -241,124 +241,83 @@ class KonvektorApp(_Base):
         ).pack(anchor="w")
         ttk.Label(
             titles,
-            text="счета, накладные и прайсы → одна таблица по образцу",
+            text=f"версия {__version__}",
             style="HeaderSub.TLabel",
         ).pack(anchor="w")
-        ttk.Label(
-            header, text=f"версия {__version__}", style="HeaderVer.TLabel"
-        ).pack(side="right", padx=18)
 
-        body = tk.Frame(self, background=BG)
-        body.pack(fill="both", expand=True, padx=16, pady=14)
-
-        # --- шаг 1: слева файл, справа ведомость — одной строкой
-        top = self._card(body, "ШАГ 1 · Файл и ведомость", gap=6)
-        step1 = ttk.Frame(top, style="Card.TFrame")
-        step1.pack(fill="x", padx=10, pady=(4, 4))
-
-        left = ttk.Frame(step1, style="Card.TFrame")
-        left.pack(side="left", fill="x", expand=True)
-        ttk.Label(left, text="Файл:", style="Small.TLabel").pack(side="left")
+        # переменные состояния (используются в обработчиках)
         self.file_var = tk.StringVar(value="файл не выбран")
-        ttk.Label(
-            left, textvariable=self.file_var, style="File.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
-        ttk.Button(
-            left, text="Выбрать файл…", style="Compact.TButton",
-            command=self.on_add_files,
-        ).pack(side="right")
-
-        right = ttk.Frame(step1, style="Card.TFrame")
-        right.pack(side="left", fill="x", expand=True, padx=(18, 0))
-        ttk.Label(right, text="Ведомость:", style="Small.TLabel").pack(side="left")
         self.ved_var = tk.StringVar(value="не загружена")
-        ttk.Label(
-            right, textvariable=self.ved_var, style="VedSmall.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
-        ttk.Button(
-            right, text="Загрузить ведомость…", style="Compact.TButton",
-            command=self.on_load_vedomost,
-        ).pack(side="right")
-
-        # --- шаг 2: куда сохранить (тоже одна строка, без пояснений)
-        mid = self._card(body, "ШАГ 2 · Куда сохранить", gap=6)
-        prow = ttk.Frame(mid, style="Card.TFrame")
-        prow.pack(fill="x", padx=10, pady=(4, 4))
-        ttk.Label(prow, text="Путь:", style="Small.TLabel").pack(side="left")
-        # обычное поле пути, как в любой программе Windows: можно вписать любую
-        # папку (в том числе на другом диске), можно стереть — тогда «Документы»
         self.out_var = tk.StringVar(value=documents_dir())
-        ttk.Entry(prow, textvariable=self.out_var, style="Path.TEntry").pack(
-            side="left", fill="x", expand=True, padx=6
-        )
-        # «Обзор…» — привычный выбор папки; поле остаётся обычным
-        ttk.Button(
-            prow, text="Обзор…", style="Compact.TButton", command=self.on_browse_output
-        ).pack(side="left")
-
-        srow = ttk.Frame(mid, style="Card.TFrame")
-        srow.pack(fill="x", padx=10, pady=(0, 4))
-        ttk.Label(srow, text="Склад и поставщик:", style="Small.TLabel").pack(side="left")
         self.source_var = tk.StringVar(value="не выбраны")
-        ttk.Label(
-            srow, textvariable=self.source_var, style="VedSmall.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
-        ttk.Button(
-            srow, text="Изменить…", style="Compact.TButton",
-            command=self.on_choose_source,
-        ).pack(side="right")
 
-        # --- кнопки: три способа сверки, затем сохранение и открытие
-        act = ttk.Frame(body, style="Card.TFrame")
-        act.pack(fill="x", pady=(2, 10))
+        # панель кнопок на синем фоне (сгруппирована в выпадающие меню)
+        nav = tk.Frame(header, background=NAVY)
+        nav.pack(side="right", padx=14, pady=18)
 
-        convert_row = ttk.Frame(act, style="Card.TFrame")
-        convert_row.pack(fill="x")
+        # 1. Меню «Файл и папка ▾»
+        file_mb = ttk.Menubutton(nav, text="Файл и ведомость ▾", style="Header.TMenubutton")
+        file_menu = tk.Menu(file_mb, tearoff=0)
+        file_menu.add_command(label="Выбрать файл…", command=self.on_add_files)
+        file_menu.add_command(label="Загрузить ведомость…", command=self.on_load_vedomost)
+        file_menu.add_separator()
+        file_menu.add_command(label="Склад и поставщик…", command=self.on_choose_source)
+        file_menu.add_command(label="Папка сохранения…", command=self.on_browse_output)
+        file_mb["menu"] = file_menu
+        file_mb.pack(side="left", padx=(0, 6))
+
+        # 2. Меню «Конвертировать ▾»
+        self.convert_mb = ttk.Menubutton(nav, text="Конвертировать ▾", style="HeaderPrimary.TMenubutton")
+        convert_menu = tk.Menu(self.convert_mb, tearoff=0)
         self.convert_buttons = {}
         for strategy in (MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME):
-            button = ttk.Button(
-                convert_row,
-                text="Конвертировать " + MATCH_TITLES[strategy],
-                style="Primary.TButton",
+            convert_menu.add_command(
+                label="Конвертировать " + MATCH_TITLES[strategy],
                 command=lambda s=strategy: self.on_convert(s),
             )
-            button.pack(side="left", padx=(0, 8))
-            self.convert_buttons[strategy] = button
-        # «по наименованию» — основная кнопка (её и нажимают чаще всего)
-        self.run_btn = self.convert_buttons[MATCH_NAME]
+            self.convert_buttons[strategy] = self.convert_mb
+        self.convert_mb["menu"] = convert_menu
+        self.convert_mb.pack(side="left", padx=(0, 6))
+        self.run_btn = self.convert_mb
 
-        tools_row = ttk.Frame(act, style="Card.TFrame")
-        tools_row.pack(fill="x", pady=(8, 0))
+        # 3. Кнопка «Сохранить»
         self.save_btn = ttk.Button(
-            tools_row, text="Сохранить", style="Secondary.TButton",
+            nav, text="Сохранить", style="Secondary.TButton",
             command=self.on_save, state="disabled",
         )
-        self.save_btn.pack(side="left")
-        # подсказка про правку названия прямо в таблице (одна строка, не мешает)
+        self.save_btn.pack(side="left", padx=(0, 6))
+
+        # 4. Кнопки «Открыть файл» и «Открыть папку» в меню «Открыть ▾»
+        open_mb = ttk.Menubutton(nav, text="Открыть ▾", style="Header.TMenubutton")
+        open_menu = tk.Menu(open_mb, tearoff=0)
+        open_menu.add_command(label="Открыть файл", command=self.on_open_result, state="disabled")
+        open_menu.add_command(label="Открыть папку", command=self.on_open_folder, state="disabled")
+        open_mb["menu"] = open_menu
+        open_mb.pack(side="left")
+
+        class _MenuItemProxy:
+            def __init__(self, menu: tk.Menu, index: int) -> None:
+                self._menu = menu
+                self._index = index
+
+            def configure(self, **kw) -> None:
+                self._menu.entryconfigure(self._index, **kw)
+
+        self.open_file_btn = _MenuItemProxy(open_menu, 0)
+        self.open_folder_btn = _MenuItemProxy(open_menu, 1)
+
+        # --- сразу под синим заголовком — таблица
+        body = tk.Frame(self, background=BG)
+        body.pack(fill="both", expand=True, padx=10, pady=(8, 8))
+
         self.edit_hint = ttk.Label(
-            tools_row,
+            body,
             text="двойной щелчок по «Из ведомости» — изменить название",
             style="Hint.TLabel",
         )
-        self.edit_hint.pack(side="left", padx=(14, 0))
 
-        self.open_folder_btn = ttk.Button(
-            tools_row, text="Открыть папку", style="Ghost.TButton",
-            command=self.on_open_folder, state="disabled",
-        )
-        self.open_folder_btn.pack(side="right")
-        self.open_file_btn = ttk.Button(
-            tools_row, text="Открыть файл", style="Ghost.TButton",
-            command=self.on_open_result, state="disabled",
-        )
-        self.open_file_btn.pack(side="right", padx=(0, 8))
-
-        # --- шаг 3: предпросмотр результата вместо журнала
-        bottom = self._card(body, "ШАГ 3 · Результат (таблица)")
-        bottom.pack_configure(fill="both", expand=True)
-
-        table_wrap = ttk.Frame(bottom, style="Card.TFrame")
-        table_wrap.pack(fill="both", expand=True, padx=14, pady=(10, 6))
+        table_wrap = ttk.Frame(body, style="Card.TFrame")
+        table_wrap.pack(fill="both", expand=True)
 
         self._setup_table_style()
         # рамка вокруг таблицы не зависит от темы оформления Windows
