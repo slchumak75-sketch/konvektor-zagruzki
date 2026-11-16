@@ -287,6 +287,13 @@ class KonvektorApp(_Base):
         )
         self.save_btn.pack(side="left", padx=(0, 6))
 
+        # 4. Кнопка «Очистить таблицу»
+        self.clear_btn = ttk.Button(
+            nav, text="Очистить таблицу", style="Secondary.TButton",
+            command=self.on_clear_table,
+        )
+        self.clear_btn.pack(side="left", padx=(0, 6))
+
         # 4. Кнопки «Открыть файл» и «Открыть папку» в меню «Открыть ▾»
         open_mb = ttk.Menubutton(nav, text="Открыть ▾", style="Header.TMenubutton")
         open_menu = tk.Menu(open_mb, tearoff=0)
@@ -744,6 +751,7 @@ class KonvektorApp(_Base):
                 self._strategy,
                 self._overrides,
                 supplier=self._supplier_choice,
+                sklad=self._sklad,
             )
         self._matcher = matcher
         options = ConvertOptions(
@@ -910,8 +918,8 @@ class KonvektorApp(_Base):
             + (f" от {m.date_text}" if m.doc_date else "")
             for m in result.metas.values()
         )
-        # файл обработан — список очищается сам (до подсказки, чтобы её не затёрло)
-        self._clear_files()
+        # файл остаётся в буфере до нажатия «Очистить таблицу» — можно
+        # поочерёдно конвертировать разными способами без повторной загрузки
 
         planned = result.planned_output
         parts = []
@@ -1092,13 +1100,25 @@ class KonvektorApp(_Base):
 
     # ------------------------------------- выбор номенклатуры из ведомости
     def _on_preview_click(self, event) -> None:
-        """Одиночный щелчок по «▾» открывает список номенклатуры ведомости."""
-        if self._vedomost is None or self._matcher is None:
-            return
+        """Одиночный щелчок: по штрихкоду — копирует в буфер, по «▾» — открывает список."""
         target = self._cell_at(event)
         if target is None:
             return
         row_id, title = target
+        if title == "Штрихкод":
+            stored = self._preview_rows.get(row_id)
+            if stored is not None:
+                barcode = str(stored["item"].barcode or "").strip()
+                if barcode:
+                    try:
+                        self.clipboard_clear()
+                        self.clipboard_append(barcode)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.hint_var.set(f"Штрихкод {barcode} скопирован в буфер обмена.")
+            return
+        if self._vedomost is None or self._matcher is None:
+            return
         if title != COLUMN_PICK:
             return
         self.open_chooser(row_id)
@@ -1481,6 +1501,19 @@ class KonvektorApp(_Base):
             self._log(f"выбран файл: {full}")
             break
         self._update_status()
+
+    def on_clear_table(self) -> None:
+        """Очистить таблицу и сбросить загруженный файл из буфера."""
+        if self._running:
+            return
+        self._clear_preview()
+        self._clear_files()
+        self._pending_source = None
+        self._pending_result = None
+        self.save_btn.configure(state="disabled")
+        self.open_file_btn.configure(state="disabled")
+        self.open_folder_btn.configure(state="disabled")
+        self.hint_var.set("Таблица очищена.")
 
     def _clear_files(self) -> None:
         self.files.clear()

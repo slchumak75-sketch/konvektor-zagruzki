@@ -112,6 +112,7 @@ _ROLE_ALIASES = OrderedDict(
         ("barcode", ("штрихкод", "штрих код", "код", "баркод", "ean", "штриховой код")),
         ("unit", ("ед", "единица", "единица измерения", "ед изм", "еденица")),
         ("supplier", ("последний поставщик", "поставщик", "контрагент")),
+        ("sklad", ("склад",)),
         ("group", ("группа номенклатуры", "группа", "категория", "вид номенклатуры")),
         ("stock", ("конечный остаток", "остаток", "количество")),
         ("price", ("цена последнего поставщика", "цена", "розничная цена")),
@@ -285,6 +286,7 @@ class VedRow:
     barcode: str = ""
     unit: str = ""
     supplier: str = ""
+    sklad: str = ""
     group: str = ""
     stock: float = 0.0
     price: float = 0.0
@@ -658,6 +660,9 @@ def parse_vedomost(source: Any) -> Vedomost:
                 supplier=clean_text(_cell(raw, columns["supplier"]))
                 if columns["supplier"] is not None
                 else "",
+                sklad=clean_text(_cell(raw, columns["sklad"]))
+                if columns.get("sklad") is not None
+                else "",
                 group=clean_text(_cell(raw, columns["group"]))
                 if columns["group"] is not None
                 else "",
@@ -763,11 +768,13 @@ class Matcher:
         overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
         min_score: float = AUTO_SCORE,
         supplier: str = "",
+        sklad: str = "",
     ) -> None:
         self.vedomost = vedomost
         self.strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
         #: поставщик, выбранный пользователем в окне (пусто — берём из документа)
         self.forced_supplier = clean_text(supplier)
+        self.sklad = clean_text(sklad).lower()
         self.overrides: Dict[Tuple[str, str, int], Optional[VedRow]] = dict(overrides or {})
         self.min_score = min_score
         self.entries: List[MatchEntry] = []

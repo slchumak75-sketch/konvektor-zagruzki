@@ -286,6 +286,9 @@ def test_list_is_cleared_after_conversion(gui):
     app.out_var.set(r"D:\Итоги")
     app.on_convert()
     _run(app)
+    # файл остаётся в буфере до нажатия «Очистить таблицу»
+    assert len(app.files) == 1
+    app.on_clear_table()
     assert app.files == []
     assert app.file_var.get() == "файл не выбран"
     # путь сохранения — настройка, а не имя файла: он остаётся
