@@ -1,0 +1,139 @@
+name: Сборка Windows-приложения
+
+# Сборка запускается автоматически после любых изменений в репозитории:
+#   * push в любую ветку;
+#   * pull request;
+#   * ручной запуск из вкладки Actions;
+#   * тег вида v1.0.0 — дополнительно публикуется релиз с готовыми .exe.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------------------------ тесты
+  test:
+    name: Тесты и самопроверка (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -r requirements-dev.txt
+
+      - name: Тесты
+        run: python -m pytest -q
+
+      - name: Самопроверка на файлах-образцах
+        run: python -m konvektor.cli --selftest . -q
+
+  # ------------------------------------------------- приложение для Windows
+  build-windows:
+    name: Сборка .exe (Windows)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -r requirements-dev.txt
+
+      - name: Собрать оконную версию (Konvektor.exe)
+        shell: pwsh
+        run: >
+          pyinstaller --noconfirm --onefile --noconsole
+          --name Konvektor
+          --icon assets/konvektor.ico
+          --add-data "assets/konvektor_icon.png;assets"
+          app_gui.py
+
+      - name: Собрать консольную версию (Konvektor-cli.exe)
+        shell: pwsh
+        run: >
+          pyinstaller --noconfirm --onefile --console
+          --name Konvektor-cli
+          --icon assets/konvektor.ico
+          app_cli.py
+
+      - name: Проверить собранные .exe
+        shell: pwsh
+        run: |
+          .\dist\Konvektor-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
+
+          .\dist\Konvektor-cli.exe --explain "КХ2104033 (1).xls"
+          if ($LASTEXITCODE -ne 0) { throw "Режим --explain в .exe не работает: код $LASTEXITCODE" }
+
+          .\dist\Konvektor-cli.exe --diagnose "КХ2104033 (1).xls"
+          if ($LASTEXITCODE -ne 0) { throw "Режим --diagnose в .exe не работает: код $LASTEXITCODE" }
+
+          .\dist\Konvektor-cli.exe --selftest .
+          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe не прошла: код $LASTEXITCODE" }
+
+          .\dist\Konvektor-cli.exe --selftest . --json > $env:TEMP\selftest.json
+          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe (--json) не прошла: код $LASTEXITCODE" }
+          Get-Content $env:TEMP\selftest.json | Select-Object -Last 3
+
+          if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
+          Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
+
+      - name: Упаковать в ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist\Konvektor.exe package\
+          Copy-Item dist\Konvektor-cli.exe package\
+          Copy-Item README.md package\README.md
+          Copy-Item docs\Пользователю.md package\"Как пользоваться.md"
+          Compress-Archive -Path package\* -DestinationPath Konvektor-windows.zip -Force
+
+      - name: Сохранить готовые файлы
+        uses: actions/upload-artifact@v4
+        with:
+          name: Konvektor-windows
+          path: |
+            dist/Konvektor.exe
+            dist/Konvektor-cli.exe
+            Konvektor-windows.zip
+          retention-days: 90
+
+      - name: Опубликовать релиз (только для тегов v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Konvektor.exe
+            dist/Konvektor-cli.exe
+            Konvektor-windows.zip
+          generate_release_notes: true
+          body: |
+            Готовые файлы для Windows:
+
+            * `Konvektor.exe` — оконная программа (просто запустить).
+            * `Konvektor-cli.exe` — консольная версия для пакетной обработки.
+            * `Konvektor-windows.zip` — оба файла + инструкция.
+
+            Скачайте ZIP, распакуйте в любую папку и запустите `Konvektor.exe`.

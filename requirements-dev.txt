@@ -1,0 +1,4 @@
+# Только для разработки и сборки (в .exe не попадают)
+-r requirements.txt
+pytest>=7.4
+pyinstaller>=6.3
