@@ -23,7 +23,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from . import APP_NAME, TEMPLATE_COLUMNS, __version__
+from . import APP_NAME, NOVINKA_COLUMN, TEMPLATE_COLUMNS, __version__
 from .extract import Item
 from .validate import MODE_TITLES, Issue, ValidationReport
 
@@ -151,6 +151,8 @@ class WorkbookPayload:
     stats: List[FileStat] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     with_source: bool = False
+    #: добавить колонку «Новинка» (когда сверялись с ведомостью)
+    with_novinka: bool = False
 
 
 def safe_sheet_title(title: str, used: Sequence[str] = ()) -> str:
@@ -176,9 +178,19 @@ def _write_header(ws: Worksheet, row: int, columns: Sequence[str]) -> None:
     ws.row_dimensions[row].height = 30
 
 
-def _write_data_sheet(ws: Worksheet, items: Sequence[Item], with_source: bool = False) -> int:
+def _write_data_sheet(
+    ws: Worksheet,
+    items: Sequence[Item],
+    with_source: bool = False,
+    with_novinka: bool = False,
+) -> int:
     columns = list(TEMPLATE_COLUMNS)
     widths = list(COLUMN_WIDTHS)
+    if with_novinka:
+        # «Новинка» — последняя колонка: товара нет в ведомости, номенклатуру
+        # не выбрали (новый товар). Пусто — номенклатура из ведомости.
+        columns += [NOVINKA_COLUMN]
+        widths += [16]
     if with_source:
         columns += ["файл", "строка"]
         widths += [38, 8]
@@ -201,6 +213,8 @@ def _write_data_sheet(ws: Worksheet, items: Sequence[Item], with_source: bool = 
             it.vat_sum,
             it.sum_with_vat,
         ]
+        if with_novinka:
+            values.append("Новинка" if it.novinka else None)
         if with_source:
             values += [os.path.basename(it.source), it.row]
         for c, val in enumerate(values, start=1):
@@ -426,7 +440,12 @@ def write_workbook(path: str, payload: WorkbookPayload) -> str:
         name = safe_sheet_title(title, used)
         used.append(name)
         ws = wb.create_sheet(name)
-        _write_data_sheet(ws, items, with_source=payload.with_source)
+        _write_data_sheet(
+            ws,
+            items,
+            with_source=payload.with_source,
+            with_novinka=payload.with_novinka,
+        )
 
     issues_ws = wb.create_sheet(safe_sheet_title("Проверки", used))
     used.append("Проверки")

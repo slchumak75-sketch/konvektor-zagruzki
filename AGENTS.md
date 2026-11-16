@@ -62,8 +62,12 @@ Windows-программа (Python + tkinter + PyInstaller), которая пр
 | Поставщик — не наша организация | `konvektor/meta.py` | `_supplier_and_buyer`, `is_our_company`, `our_companies`, `DEFAULT_OUR_COMPANIES` |
 | Сверка с ведомостью остатков ТМЦ | `konvektor/vedomost.py` | `parse_vedomost`, `Vedomost.candidates`, `Matcher` |
 | Пороги и оценка похожести названий | `konvektor/vedomost.py` | `similarity`, `AUTO_SCORE`, `CONFIDENT_SCORE`, `_token_pair` |
-| Правка названия прямо в таблице | `konvektor/gui.py` | `edit_cell`, `commit_edit`, `_preview_values` |
-| Ключи командной строки | `konvektor/cli.py` | `build_parser`, `main` (`--vedomost`, `--match`) |
+| Выбор номенклатуры «▼» и правка названия | `konvektor/gui.py` | `open_chooser`, `_chooser_picked`, `edit_cell`, `commit_edit`, `_preview_values` |
+| Выпадающий список номенклатуры | `konvektor/pick.py` | `_VedChooser`, `CHOICE_CUSTOM` |
+| Склад и поставщик при выгрузке | `konvektor/pick.py`, `konvektor/gui.py` | `SourceDialog`, `ask_source`, `source_text` |
+| Папка `склад / поставщик / дата` | `konvektor/pipeline.py` | `output_path_for` (`sklad`, `supplier`), `ConvertOptions` |
+| Колонка «Новинка» в файле | `konvektor/writer.py`, `konvektor/vedomost.py` | `WorkbookPayload.with_novinka`, `_write_data_sheet`, `Item.novinka` |
+| Ключи командной строки | `konvektor/cli.py` | `build_parser`, `main` (`--vedomost`, `--match`, `--sklad`, `--supplier`) |
 | Сборка/CI | `.github/workflows/build.yml` | — |
 
 ## 4. Алгоритм добавления нового поставщика (пошагово)

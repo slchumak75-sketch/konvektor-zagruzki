@@ -65,12 +65,14 @@ def test_window_builds_with_single_file(gui, known_paths):
     assert len(app.files) == 1
     assert app.file_var.get().startswith("Кореличи")
     assert "Конвектор" in app.title()
-    # в окне две колонки наименования и процент совпадения, «файл»/«строка» нет
+    # в окне две колонки наименования, «▼» для выбора и процент совпадения
     assert list(app.preview.columns_list) == [
-        "Штрихкод", "Артикул", "Из документа", "Из ведомости", "% совпадения",
+        "Штрихкод", "Артикул", "Из документа", "Из ведомости", "▼", "% совпадения",
         "ед. изм.", "количество", "цена", "сумма", "ставка НДС", "сумма НДС",
         "сумма с НДС",
     ]
+    # «▼» — узкая колонка-кнопка сразу справа от названия
+    assert app.preview.widths["▼"] <= 30
     assert app.preview.headings["Из документа"] == "Из документа"
     assert app.preview.headings["Из ведомости"] == "Из ведомости"
     assert "файл" not in app.preview.headings
@@ -195,9 +197,9 @@ def test_quantity_and_vat_have_no_decimal_comma(gui):
 
     app.on_convert()
     _run(app)
-    rows = [row[1] for row in app.preview.rows]
-    quantities = [r[6] for r in rows if r[6]]
-    rates = {r[9] for r in rows if r[9]}
+    rows = [dict(zip(app.preview.columns_list, row[1])) for row in app.preview.rows]
+    quantities = [r["количество"] for r in rows if r["количество"]]
+    rates = {r["ставка НДС"] for r in rows if r["ставка НДС"]}
     assert quantities and rates
     assert not any(q.endswith(",00") for q in quantities), quantities
     assert all("," not in rate for rate in rates), rates
@@ -269,10 +271,14 @@ def test_preview_shows_converted_table(gui):
     rows = app.preview.rows
     assert len(rows) == 11  # «Кореличи» — 11 позиций
     first = rows[0][1]
-    assert len(first) == 12  # 10 колонок шаблона + «из ведомости» + «% совпадения»
+    # 10 колонок шаблона + «из ведомости», «▼» и «% совпадения»
+    assert len(first) == 13 == len(app.preview.columns_list)
     assert first[2]  # наименование из документа
     assert first[3] == ""  # ведомость не загружена — подбирать не из чего
-    assert "," in first[7]  # числа показываем как в Excel — с запятой
+    assert first[4] == ""  # «▼» появляется только с ведомостью
+    row = dict(zip(app.preview.columns_list, first))
+    # числа показываем как в Excel — с запятой
+    assert "," in row["цена"] or "," in row["сумма с НДС"]
 
 
 def test_list_is_cleared_after_conversion(gui):
@@ -564,13 +570,15 @@ def test_convert_strategy_is_passed_to_matcher(gui, tmp_path):
 
 
 
-# ------------------------------------------------- правка названия в таблице
+# --------------------------------- выбор номенклатуры из ведомости («▼»)
 class _Event:
-    """Простое событие мыши для двойного щелчка по таблице."""
+    """Простое событие мыши для щелчка по таблице."""
 
     def __init__(self, x=0, y=0):
         self.x = x
         self.y = y
+        self.num = 0
+        self.delta = 0
 
 
 def _open_vedomost_and_convert(app, tmp_path):
@@ -588,53 +596,98 @@ def _row_with_doc(app, startswith: str):
     raise AssertionError("позиция не найдена: " + startswith)
 
 
-def _double_click_from_ved(app, row_id):
-    """Сымитировать двойной щелчок по ячейке «Из ведомости» этой строки."""
-    column = "#" + str(app.preview.columns_list.index("Из ведомости") + 1)
+def _click_cell(app, row_id, column: str, handler=None):
+    """Щёлкнуть по ячейке указанной колонки этой строки."""
     app.preview.fake_row = row_id
-    app.preview.fake_column = column
-    app.preview.fake_region = "cell"
-    app._on_preview_double_click(_Event(10, 10))
+    app.preview.fake_column = "#" + str(app.preview.columns_list.index(column) + 1)
+    (handler or app._on_preview_click)(_Event(10, 10))
 
 
-def test_double_click_opens_editor_only_on_vedomost_column(gui, tmp_path):
+def _choose(app, index: int):
+    """Выбрать пункт `index` в открытом выпадающем списке."""
+    assert app._chooser is not None
+    app._chooser.box.selection_set(index)
+    app._chooser.box._selection = (index,)
+    app._chooser._on_click()
+
+
+def _values(app, row_id):
+    target = next(row[1] for row in app.preview.rows if row[0] == row_id)
+    return dict(zip(app.preview.columns_list, target))
+
+
+def test_arrow_opens_list_only_in_vedomost_columns(gui, tmp_path):
+    """«▼» открывает список номенклатуры; другие колонки — нет."""
     app, _, _ = gui
     _open_vedomost_and_convert(app, tmp_path)
     row_id, _stored = _row_with_doc(app, "Газ")
 
-    # щелчок по колонке «Из документа» редактор не открывает
-    app.preview.fake_row = row_id
-    app.preview.fake_column = "#" + str(app.preview.columns_list.index("Из документа") + 1)
-    app._on_preview_double_click(_Event(10, 10))
-    assert app._editor is None and app._editing is None
+    # щелчок по «Из документа» список не открывает
+    _click_cell(app, row_id, "Из документа")
+    assert app._chooser is None
 
-    _double_click_from_ved(app, row_id)
-    assert app._editing == row_id
-    assert app._editor is not None
-    # в поле — текущее название из ведомости, в списке — похожие позиции
-    assert app._edit_var.get() == "Газ сжижен.в однораз.баллоне WERKER 520см3"
-    assert isinstance(app._editor.values_list, list)
+    _click_cell(app, row_id, "▼")
+    assert app._chooser is not None
+    labels = app._chooser.labels()
+    # первый пункт — «не выбирать» (товар новый), последний — своё название
+    assert labels[0].startswith("— не выбирать")
+    assert labels[-1] == "Своё название…"
+    # похожие позиции идут с процентом совпадения
+    assert any("%" in label for label in labels[1:-1])
 
 
-def test_typed_name_from_vedomost_renames_and_fills_article(gui, tmp_path):
-    """Вписали точное название из ведомости — позиция берётся из неё."""
+def test_choosing_row_from_vedomost_renames_item(gui, tmp_path):
     app, _, _ = gui
     _open_vedomost_and_convert(app, tmp_path)
-    row_id, stored = _row_with_doc(app, "Гидроизол")
+    row_id, stored = _row_with_doc(app, "Газ")
 
-    _double_click_from_ved(app, row_id)
-    app._edit_var.set("Герметик акрил. бел. 280мл WUNDER")
-    app.commit_edit()
+    _click_cell(app, row_id, "▼")
+    wanted = "Газ сжижен.в однораз.баллоне WERKER 520см3"
+    index = next(
+        i
+        for i, (_label, value) in enumerate(app._chooser.items)
+        if getattr(value, "nomenclature", "") == wanted
+    )
+    _choose(app, index)
 
     override = app._overrides[stored["key"]]
-    assert getattr(override, "nomenclature", "") == "Герметик акрил. бел. 280мл WUNDER"
-    values = dict(zip(app.preview.columns_list, app.preview.rows[0][1]))
-    target = next(row[1] for row in app.preview.rows if row[0] == row_id)
-    values = dict(zip(app.preview.columns_list, target))
-    assert values["Из ведомости"] == "Герметик акрил. бел. 280мл WUNDER"
+    assert getattr(override, "nomenclature", "") == wanted
+    values = _values(app, row_id)
+    assert values["Из ведомости"] == wanted
     assert values["% совпадения"] == "вручную"
     assert app.preview.row_tags[row_id] == ("manual",)
-    assert stored["item"].name == "Герметик акрил. бел. 280мл WUNDER"
+    assert stored["item"].name == wanted
+    # список закрылся
+    assert app._chooser is None
+
+
+def test_do_not_choose_keeps_doc_name_and_marks_novinka(gui, tmp_path):
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, stored = _row_with_doc(app, "Газ")
+
+    _click_cell(app, row_id, "▼")
+    _choose(app, 0)  # «— не выбирать (новый товар) —»
+
+    assert app._overrides[stored["key"]] is None
+    values = _values(app, row_id)
+    assert values["Из ведомости"] == ""
+    assert values["% совпадения"] == "не выбирать"
+    # наименование документа не тронуто
+    assert stored["item"].name.startswith("Газ сжиженный WERKER")
+
+
+def test_custom_item_opens_editor(gui, tmp_path):
+    """Пункт «Своё название…» открывает поле ввода поверх ячейки."""
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _stored = _row_with_doc(app, "Гидроизол")
+
+    _click_cell(app, row_id, "▼")
+    _choose(app, len(app._chooser.items) - 1 if app._chooser else 0)
+
+    assert app._editing == row_id
+    assert app._editor is not None
 
 
 def test_own_text_is_kept_as_is(gui, tmp_path):
@@ -643,7 +696,9 @@ def test_own_text_is_kept_as_is(gui, tmp_path):
     _open_vedomost_and_convert(app, tmp_path)
     row_id, stored = _row_with_doc(app, "Гидроизол")
 
-    _double_click_from_ved(app, row_id)
+    _click_cell(app, row_id, "▼", handler=app._on_preview_double_click)
+    _choose(app, len(app._chooser.items) - 1)
+    assert app._editing == row_id
     app._edit_var.set("Гидроизол ХКП S10м2 серый 3,5 мм (своё)")
     app.commit_edit()
 
@@ -651,22 +706,18 @@ def test_own_text_is_kept_as_is(gui, tmp_path):
     assert stored["item"].name == "Гидроизол ХКП S10м2 серый 3,5 мм (своё)"
 
 
-def test_empty_cell_means_do_not_choose(gui, tmp_path):
+def test_empty_typed_text_means_do_not_choose(gui, tmp_path):
     app, _, _ = gui
     _open_vedomost_and_convert(app, tmp_path)
     row_id, stored = _row_with_doc(app, "Газ")
 
-    _double_click_from_ved(app, row_id)
+    _click_cell(app, row_id, "▼")
+    _choose(app, len(app._chooser.items) - 1)
     app._edit_var.set("")
     app.commit_edit()
 
     assert app._overrides[stored["key"]] is None
-    target = next(row[1] for row in app.preview.rows if row[0] == row_id)
-    values = dict(zip(app.preview.columns_list, target))
-    assert values["Из ведомости"] == ""
-    assert values["% совпадения"] == "не выбирать"
-    # наименование документа не тронуто
-    assert stored["item"].name.startswith("Газ сжиженный WERKER")
+    assert _values(app, row_id)["Из ведомости"] == ""
 
 
 def test_edited_name_goes_to_the_saved_file(gui, tmp_path):
@@ -679,7 +730,8 @@ def test_edited_name_goes_to_the_saved_file(gui, tmp_path):
     _open_vedomost_and_convert(app, tmp_path)
     row_id, _stored = _row_with_doc(app, "Гидроизол")
 
-    _double_click_from_ved(app, row_id)
+    _click_cell(app, row_id, "▼")
+    _choose(app, len(app._chooser.items) - 1)
     app._edit_var.set("Гидроизол ХКП 3,5 мм (проверено)")
     app.commit_edit()
 
@@ -694,14 +746,47 @@ def test_edited_name_goes_to_the_saved_file(gui, tmp_path):
     assert "Гидроизол ХКП 3,5 мм (проверено)" in names
 
 
-def test_edit_requires_vedomost(gui):
-    """Без ведомости править нечего — редактор не открывается."""
+def test_scroll_closes_list_and_editor(gui, tmp_path):
+    """Прокрутка закрывает список и поле ввода — окно не «висит» на месте."""
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _stored = _row_with_doc(app, "Газ")
+
+    _click_cell(app, row_id, "▼")
+    assert app._chooser is not None
+    app._on_preview_wheel(_Event(10, 10))
+    assert app._chooser is None
+
+    _click_cell(app, row_id, "▼")
+    _choose(app, len(app._chooser.items) - 1)
+    assert app._editor is not None
+    app._preview_yview("moveto", 0.5)  # прокрутка полосой прокрутки
+    assert app._editor is None and app._editing is None
+
+
+def test_popup_closes_when_row_scrolled_away(gui, tmp_path):
+    """Сторож закрывает список, если строка «уехала» при прокрутке."""
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _stored = _row_with_doc(app, "Газ")
+
+    _click_cell(app, row_id, "▼")
+    assert app._chooser is not None
+    # строка ушла из видимой области — bbox пустой, как при прокрутке
+    app.preview.bbox = lambda *a, **k: ""
+    app._check_popup()
+    assert app._chooser is None
+    assert app._popup_row is None
+
+
+def test_chooser_requires_vedomost(gui):
+    """Без ведомости выбирать нечего — список не открывается."""
     app, _, _ = gui
     app.on_convert()
     _run(app)
     row_id = next(iter(app._preview_rows))
-    _double_click_from_ved(app, row_id)
-    assert app._editor is None
+    _click_cell(app, row_id, "▼")
+    assert app._chooser is None
 
 
 # ------------------------------------------------------ узкие плашки шагов
@@ -720,3 +805,85 @@ def test_step_cards_use_compact_buttons(gui):
     # мелкие подписи полей
     small = [r for r in fake_tk.RECORDS if r.get("style") == "Small.TLabel"]
     assert len(small) >= 3
+
+
+# -------------------------------------------- склад и поставщик (диалог 1.7.0)
+def _dialog(app):
+    dialog = getattr(app, "_source_dialog", None)
+    assert dialog is not None, "диалог склада/поставщика не открылся"
+    return dialog
+
+
+def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
+    """При выборе файла спрашиваем склад и поставщика из ведомости."""
+    app, module, dialogs = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    path = str(next(iter(known_sample_paths())))
+    dialogs.open_result = (path,)
+    app.on_add_files()
+    dialog = _dialog(app)
+    # склады заказчика
+    assert list(dialog.sklad_buttons) == ["Мир", "Кореличи"]
+    # в списке поставщиков — «как в документе» и все поставщики ведомости
+    values = list(dialog.supplier_box.options.get("values") or [])
+    assert values[0].startswith("— как в документе")
+    assert 'ООО "ОМА"' in values
+
+    dialog.sklad_var.set("Кореличи")
+    dialog.supplier_var.set('ООО "ОМА"')
+    dialog.on_ok()
+    assert app._sklad == "Кореличи"
+    assert app._supplier_choice == 'ООО "ОМА"'
+    assert app.source_var.get() == 'Кореличи / ООО "ОМА"'
+
+
+def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
+    """Выбранный склад задаёт папку результата и область поиска в ведомости."""
+    app, _, _ = gui
+    out_dir = tmp_path / "Итоги"
+    app.out_var.set(str(out_dir))
+    app.load_vedomost(_write_vedomost(tmp_path))
+    app._source_chosen("Мир", 'ООО "ОМА"')
+    app._add_files([str(next(iter(known_sample_paths())))])
+    app.on_convert(MATCH_NAME)
+    _run(app)
+
+    assert app._matcher is not None
+    assert app._matcher.forced_supplier == 'ООО "ОМА"'
+    planned = app._pending_result.planned_output
+    import datetime as dt
+
+    today = f"{dt.date.today():%d.%m.%Y}"
+    assert planned == str(out_dir / "Мир" / "ООО ОМА" / f"{today}.xlsx"), planned
+
+    app.on_save()
+    _run(app)
+    assert app._last_outputs and app._last_outputs[0] == planned
+    import os
+
+    assert os.path.exists(planned)
+
+
+def test_source_line_is_visible_in_window(gui):
+    """Строка «Склад и поставщик» есть в окне и её можно изменить."""
+    app, _, _ = gui
+    assert "Склад и поставщик:" in fake_tk.TEXTS
+    assert "Изменить…" in fake_tk.TEXTS
+    app._source_chosen("Кореличи", "")
+    assert app.source_var.get() == "Кореличи / как в документе"
+
+
+def known_sample_paths():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    samples = [
+        path
+        for path in root.iterdir()
+        if path.suffix.lower() in {".xls", ".xlsx"} and path.name.startswith("Кореличи")
+    ]
+    if not samples:
+        import pytest
+
+        pytest.skip("нет файла-образца")
+    return samples

@@ -751,9 +751,12 @@ class Matcher:
         strategy: str = MATCH_NAME,
         overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
         min_score: float = AUTO_SCORE,
+        supplier: str = "",
     ) -> None:
         self.vedomost = vedomost
         self.strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
+        #: поставщик, выбранный пользователем в окне (пусто — берём из документа)
+        self.forced_supplier = clean_text(supplier)
         self.overrides: Dict[Tuple[str, str, int], Optional[VedRow]] = dict(overrides or {})
         self.min_score = min_score
         self.entries: List[MatchEntry] = []
@@ -765,9 +768,14 @@ class Matcher:
 
     # -------------------------------------------------------------- служебное
     def begin_file(self, path: str, supplier: str = "") -> None:
-        """Начать новый файл: поставщик документа задаёт область поиска."""
+        """Начать новый файл: поставщик задаёт область поиска.
+
+        Поставщик, выбранный пользователем в окне, важнее найденного в
+        документе: в счёте поставщик может быть не распознан или написан
+        иначе, а ведомость знает правильное название.
+        """
         self._file = path
-        self._supplier_text = clean_text(supplier)
+        self._supplier_text = self.forced_supplier or clean_text(supplier)
         key, found = self.vedomost.supplier_group(self._supplier_text)
         self._supplier_key = key
         self._supplier_found = found
@@ -800,6 +808,7 @@ class Matcher:
             "article": counters[MATCH_ARTICLE],
             "name": counters[MATCH_NAME],
             "manual": counters[HOW_MANUAL],
+            "novinka": sum(1 for e in self.entries if not e.matched),
             "skipped": sum(1 for e in self.entries if e.skipped),
             "review": sum(1 for e in self.entries if e.review),
             "unmatched": sum(1 for e in self.entries if not e.matched and not e.skipped),
@@ -823,7 +832,7 @@ class Matcher:
         if s["review"]:
             text += f", проверить {s['review']}"
         if s["unmatched"]:
-            text += f", не подобрано {s['unmatched']}"
+            text += f", не подобрано {s['unmatched']} (пойдут как «Новинка»)"
         if s["supplier"] and not s["supplier_found"]:
             text += (
                 " · поставщика «" + str(s["supplier"]) + "» в ведомости нет — "
@@ -874,6 +883,11 @@ class Matcher:
             else:
                 entry.name = entry.doc_name
 
+        # «Новинка» — номенклатуру не выбрали (нет в ведомости или отказались)
+        try:
+            item.novinka = not entry.matched
+        except Exception:  # noqa: BLE001 - позиция может быть неизменяемой
+            pass
         self.entries.append(entry)
         self.by_key[key] = entry
         return entry

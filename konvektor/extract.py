@@ -49,6 +49,8 @@ class Item:
     vat_sum: Optional[float] = None
     sum_with_vat: Optional[float] = None
     computed: Set[str] = field(default_factory=set)
+    #: номенклатура не найдена в ведомости (или её не выбирали) — «Новинка»
+    novinka: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -67,6 +69,7 @@ class Item:
             "vat_sum": self.vat_sum,
             "sum_with_vat": self.sum_with_vat,
             "computed": sorted(self.computed),
+            "novinka": self.novinka,
         }
 
 

@@ -73,6 +73,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="чем сверять с ведомостью: barcode — штрихкод, article — артикул, "
         "name — наименование (по умолчанию)",
     )
+    p.add_argument(
+        "--sklad",
+        choices=("Мир", "Кореличи"),
+        default="",
+        help="склад заказчика: результат ляжет в <папка>/<склад>/<поставщик>/<дата>.xlsx",
+    )
+    p.add_argument(
+        "--supplier",
+        metavar="ИМЯ",
+        default="",
+        help="поставщик для папки и сверки (по умолчанию — как в документе)",
+    )
     p.add_argument("--strict", action="store_true", help="вернуть код 3, если найдены расхождения в суммах")
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
@@ -145,7 +157,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except ValueError as exc:
             print("ОШИБКА ведомости: " + str(exc), file=sys.stderr)
             return 2
-        matcher = Matcher(vedomost, args.match)
+        matcher = Matcher(vedomost, args.match, supplier=args.supplier)
         log(
             f"ведомость: {os.path.basename(args.vedomost)} — позиций {vedomost.count}, "
             f"поставщиков {len(vedomost.suppliers)}; сверка {MATCH_TITLES[matcher.strategy]}"
@@ -159,6 +171,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_dir=out,
         add_source_columns=args.source_columns,
         matcher=matcher,
+        sklad=args.sklad,
+        supplier=args.supplier,
     )
     result = convert(files, "", options, log=log, recursive=args.recursive)
 

@@ -67,6 +67,10 @@ class ConvertOptions:
     output_dir: str = ""
     #: писать ли файл сразу (False — только разобрать и показать таблицу)
     write: bool = True
+    #: склад («Мир», «Кореличи»): подпапка результата <папка>/<склад>/<поставщик>/
+    sklad: str = ""
+    #: поставщик, выбранный пользователем (пусто — берём из документа)
+    supplier: str = ""
     #: сверка с ведомостью: объект vedomost.Matcher (None — без сверки).
     #: Переименовывает номенклатуру под ведомость ещё до проверок и записи.
     matcher: Optional[object] = None
@@ -193,13 +197,22 @@ def output_path_for(
     meta: Optional[DocMeta],
     base_dir: str = "",
     date: Optional[_dt.date] = None,
+    sklad: str = "",
+    supplier: str = "",
 ) -> str:
-    """Куда сложить результат: <папка>/<поставщик дата>.xlsx.
+    """Куда сложить результат.
 
-    По умолчанию папка — «Документы»; подпапки поставщика не создаются:
-    поставщик и дата сохранения уже в имени файла.
+    Без склада — <папка>/<поставщик дата>.xlsx (как раньше).
+    Со складом — <папка>/<склад>/<поставщик>/<дата>.xlsx: склад выбирает
+    пользователь в окне, поставщик — выбранный им или найденный в документе.
     """
-    return os.path.join(base_dir or documents_dir(), output_filename(meta, date=date))
+    base = base_dir or documents_dir()
+    if sklad:
+        name = safe_path_part(supplier or (meta.supplier if meta else "")) or "Поставщик не определён"
+        folder = os.path.join(base, safe_path_part(sklad), safe_path_part(name))
+        day = date or _dt.date.today()
+        return os.path.join(folder, safe_path_part(fmt_date(day), limit=40) + ".xlsx")
+    return os.path.join(base, output_filename(meta, date=date))
 
 
 def _noop(msg: str) -> None:  # pragma: no cover - значение по умолчанию
@@ -398,7 +411,13 @@ def convert(
         base_dir = options.output_dir or documents_dir()
         if len(per_file_items) == 1:
             out_path = unique_output_path(
-                output_path_for(metas.get(per_file_items[0][0]), base_dir, date=today)
+                output_path_for(
+                    metas.get(per_file_items[0][0]),
+                    base_dir,
+                    date=today,
+                    sklad=options.sklad,
+                    supplier=options.supplier,
+                )
             )
         elif not out_path:
             out_path = unique_output_path(default_output_name(base_dir))
@@ -438,7 +457,11 @@ def convert(
             if options.naming == "auto":
                 name = unique_output_path(
                     output_path_for(
-                        metas.get(path), options.output_dir or documents_dir(), date=today
+                        metas.get(path),
+                        options.output_dir or documents_dir(),
+                        date=today,
+                        sklad=options.sklad,
+                        supplier=options.supplier,
                     )
                 )
             else:
@@ -449,6 +472,7 @@ def convert(
                 stats=stats,
                 notes=result.notes,
                 with_source=options.add_source_columns,
+                with_novinka=options.matcher is not None,
             )
             result.outputs.append(_write_with_fallback(name, payload, result, log))
     else:
@@ -462,6 +486,7 @@ def convert(
             stats=stats,
             notes=result.notes,
             with_source=options.add_source_columns,
+            with_novinka=options.matcher is not None,
         )
         result.outputs.append(_write_with_fallback(out_path, payload, result, log))
 

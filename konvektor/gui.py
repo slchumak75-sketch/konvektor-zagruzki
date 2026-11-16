@@ -44,6 +44,12 @@ from .vedomost import (
     Matcher,
     load_vedomost,
 )
+from .pick import (
+    CHOICE_CUSTOM,
+    SourceDialog,
+    _VedChooser,
+    install_styles,
+)
 from .writer import plain_number
 
 try:  # pragma: no cover - зависит от сборки Python
@@ -87,15 +93,17 @@ FILE_TYPES = [
 #: В сохранённом файле по-прежнему ровно 10 колонок образца (см. TEMPLATE_COLUMNS).
 COLUMN_FROM_DOC = "Из документа"
 COLUMN_FROM_VED = "Из ведомости"
+COLUMN_PICK = "▼"
 COLUMN_SCORE = "% совпадения"
 #: Колонки, которые показываются только при загруженной ведомости.
-_VED_ONLY_COLUMNS = (COLUMN_FROM_VED, COLUMN_SCORE)
+_VED_ONLY_COLUMNS = (COLUMN_FROM_VED, COLUMN_PICK, COLUMN_SCORE)
 
 PREVIEW_COLUMNS = [
     "Штрихкод",
     "Артикул",
     COLUMN_FROM_DOC,
     COLUMN_FROM_VED,
+    COLUMN_PICK,
     COLUMN_SCORE,
     "ед. изм.",
     "количество",
@@ -108,8 +116,8 @@ PREVIEW_COLUMNS = [
 #: Ширины — в пикселях (у Treeview width именно пиксели, а не символы).
 #: Числовые колонки и «ед. изм.» в полтора раза уже, чем были: они короткие,
 #: а место нужно двум колонкам наименования.
-PREVIEW_WIDTHS = [110, 95, 320, 320, 85, 50, 62, 63, 70, 60, 70, 68]
-PREVIEW_MIN_WIDTHS = [85, 70, 150, 150, 60, 40, 45, 50, 55, 45, 55, 60]
+PREVIEW_WIDTHS = [110, 95, 320, 320, 26, 85, 50, 62, 63, 70, 60, 70, 68]
+PREVIEW_MIN_WIDTHS = [85, 70, 150, 150, 24, 60, 40, 45, 50, 55, 45, 55, 60]
 #: Показываемые колонки без ведомости: без «из ведомости» и «% совпадения».
 PREVIEW_WITHOUT_VED = [
     title for title in PREVIEW_COLUMNS if title not in _VED_ONLY_COLUMNS
@@ -174,6 +182,15 @@ class KonvektorApp(_Base):
         self._overrides: dict = {}
         # строки таблицы: id строки -> {"item": позиция, "key": ключ сверки}
         self._preview_rows: dict = {}
+        # склад и поставщик, выбранные в диалоге при загрузке файла
+        self._sklad = ""
+        self._supplier_choice = ""
+        # открытый выпадающий список номенклатуры ведомости
+        self._chooser = None
+        self._chooser_row: Optional[str] = None
+        # сторож открытого окна: если строка «уехала» — закрываем
+        self._popup_row: Optional[str] = None
+        self._popup_y = 0
         # открытый редактор названия (Combobox поверх ячейки)
         self._editor = None
         self._edit_var = None
@@ -234,29 +251,32 @@ class KonvektorApp(_Base):
         body = tk.Frame(self, background=BG)
         body.pack(fill="both", expand=True, padx=16, pady=14)
 
-        # --- шаг 1: файл и ведомость (плашка минимальной высоты)
+        # --- шаг 1: слева файл, справа ведомость — одной строкой
         top = self._card(body, "ШАГ 1 · Файл и ведомость", gap=6)
-        row = ttk.Frame(top, style="Card.TFrame")
-        row.pack(fill="x", padx=10, pady=(4, 2))
-        ttk.Label(row, text="Файл:", style="Small.TLabel").pack(side="left")
+        step1 = ttk.Frame(top, style="Card.TFrame")
+        step1.pack(fill="x", padx=10, pady=(4, 4))
+
+        left = ttk.Frame(step1, style="Card.TFrame")
+        left.pack(side="left", fill="x", expand=True)
+        ttk.Label(left, text="Файл:", style="Small.TLabel").pack(side="left")
         self.file_var = tk.StringVar(value="файл не выбран")
         ttk.Label(
-            row, textvariable=self.file_var, style="File.TLabel", anchor="w"
+            left, textvariable=self.file_var, style="File.TLabel", anchor="w"
         ).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ttk.Button(
-            row, text="Выбрать файл…", style="Compact.TButton",
+            left, text="Выбрать файл…", style="Compact.TButton",
             command=self.on_add_files,
         ).pack(side="right")
 
-        vrow = ttk.Frame(top, style="Card.TFrame")
-        vrow.pack(fill="x", padx=10, pady=(0, 4))
-        ttk.Label(vrow, text="Ведомость:", style="Small.TLabel").pack(side="left")
+        right = ttk.Frame(step1, style="Card.TFrame")
+        right.pack(side="left", fill="x", expand=True, padx=(18, 0))
+        ttk.Label(right, text="Ведомость:", style="Small.TLabel").pack(side="left")
         self.ved_var = tk.StringVar(value="не загружена")
         ttk.Label(
-            vrow, textvariable=self.ved_var, style="VedSmall.TLabel", anchor="w"
+            right, textvariable=self.ved_var, style="VedSmall.TLabel", anchor="w"
         ).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ttk.Button(
-            vrow, text="Загрузить ведомость…", style="Compact.TButton",
+            right, text="Загрузить ведомость…", style="Compact.TButton",
             command=self.on_load_vedomost,
         ).pack(side="right")
 
@@ -275,6 +295,18 @@ class KonvektorApp(_Base):
         ttk.Button(
             prow, text="Обзор…", style="Compact.TButton", command=self.on_browse_output
         ).pack(side="left")
+
+        srow = ttk.Frame(mid, style="Card.TFrame")
+        srow.pack(fill="x", padx=10, pady=(0, 4))
+        ttk.Label(srow, text="Склад и поставщик:", style="Small.TLabel").pack(side="left")
+        self.source_var = tk.StringVar(value="не выбраны")
+        ttk.Label(
+            srow, textvariable=self.source_var, style="VedSmall.TLabel", anchor="w"
+        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
+        ttk.Button(
+            srow, text="Изменить…", style="Compact.TButton",
+            command=self.on_choose_source,
+        ).pack(side="right")
 
         # --- кнопки: три способа сверки, затем сохранение и открытие
         act = ttk.Frame(body, style="Card.TFrame")
@@ -363,14 +395,20 @@ class KonvektorApp(_Base):
                 stretch=(title == "Наименование товара"),
             )
 
-        yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self.preview.yview)
-        xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self.preview.xview)
+        yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self._preview_yview)
+        xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self._preview_xview)
         self.preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
         yscroll.pack(side="right", fill="y")
         xscroll.pack(side="bottom", fill="x")
         self.preview.pack(side="left", fill="both", expand=True)
-        # название можно править прямо в таблице: двойной щелчок по «Из ведомости»
+        # «▾» справа от названия открывает список номенклатуры ведомости
+        self.preview.bind("<Button-1>", self._on_preview_click)
         self.preview.bind("<Double-1>", self._on_preview_double_click)
+        # прокрутка и колесо закрывают открытый список/поле ввода: иначе они
+        # «висят» поверх уехавшей строки
+        self.preview.bind("<MouseWheel>", self._on_preview_wheel)
+        self.preview.bind("<Button-4>", self._on_preview_wheel)
+        self.preview.bind("<Button-5>", self._on_preview_wheel)
 
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
@@ -425,6 +463,7 @@ class KonvektorApp(_Base):
         """Единое оформление: шрифты, цвета, кнопки, карточки."""
         try:
             style = ttk.Style(self)
+            install_styles(style)
             if "clam" in style.theme_names():
                 # clam позволяет задавать цвета кнопок и рамок (vista их игнорирует)
                 style.theme_use("clam")
@@ -531,10 +570,77 @@ class KonvektorApp(_Base):
             pass
 
     # ------------------------------------------------------------- действия
+    # ------------------------------------------------- склад и поставщик
+    def suppliers_of_vedomost(self) -> List[str]:
+        """Поставщики из загруженной ведомости — для списка в диалоге."""
+        if self._vedomost is None:
+            return []
+        try:
+            found = list(self._vedomost.suppliers)
+        except Exception:  # noqa: BLE001 - не критично
+            return []
+        # ведомость отдаёт пары «поставщик, позиций» — в списке нужно имя
+        names = []
+        for item in found:
+            name = item[0] if isinstance(item, tuple) else item
+            name = str(name or "").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def on_choose_source(self) -> None:
+        """Кнопка «Изменить…»: спросить склад и поставщика."""
+        self.ask_source(force=True)
+
+    def ask_source(self, force: bool = False) -> bool:
+        """Спросить склад и поставщика (диалог поверх окна)."""
+        dialog = SourceDialog(
+            self,
+            self.suppliers_of_vedomost(),
+            self._sklad,
+            self._supplier_choice,
+            on_done=self._source_chosen,
+        )
+        self._source_dialog = dialog
+        try:
+            dialog.win.grab_set()  # пока диалог открыт, окно ждёт ответа
+        except Exception:  # noqa: BLE001 - модальность не критична
+            pass
+        if force:
+            self.hint_var.set("Выберите склад и поставщика — папка и сверка пойдут по ним.")
+        try:
+            dialog.win.wait_window()
+        except Exception:  # noqa: BLE001 - без ожидания результат тот же
+            pass
+        return True
+
+    def _source_chosen(self, sklad: str, supplier: str) -> None:
+        self._sklad = sklad or ""
+        self._supplier_choice = supplier or ""
+        self._matcher = None
+        self.source_var.set(self.source_text())
+        if self._sklad:
+            self.hint_var.set(
+                "Результат будет сохранён в папке "
+                f"«{self._sklad}{os.sep}{self._supplier_choice or 'Поставщик не определён'}»."
+            )
+        else:
+            self.hint_var.set("Склад не выбран — файл сохранится сразу в папку «Путь».")
+
+    def source_text(self) -> str:
+        """Строка «склад / поставщик» под полем пути."""
+        if not self._sklad:
+            return "не выбран (как в документе)"
+        supplier = self._supplier_choice or "как в документе"
+        return f"{self._sklad} / {supplier}"
+
     def on_add_files(self) -> None:
         path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
-        if path:
-            self._add_files([path])
+        if not path:
+            return
+        self._add_files([path])
+        # заказчик просил спрашивать склад и поставщика именно при загрузке файла
+        self.ask_source()
 
     # ------------------------------------------------------------- ведомость
     def on_load_vedomost(self) -> None:
@@ -578,6 +684,8 @@ class KonvektorApp(_Base):
         self._overrides = {}
         self._matcher = None
         self.ved_var.set(self._vedomost_text(vedomost))
+        # выбрать поставщика теперь можно из этой ведомости — обновляем строку
+        self.source_var.set(self.source_text())
         hint = (
             f"Ведомость загружена: {os.path.basename(path)}. "
             "Выберите файл и нажмите одну из кнопок «Конвертировать»."
@@ -661,7 +769,12 @@ class KonvektorApp(_Base):
         if self._vedomost is not None:
             # ручные решения пользователя (выбор/«не выбирать») переживают
             # повторную конвертацию — иначе они бы терялись при каждом нажатии
-            matcher = Matcher(self._vedomost, self._strategy, self._overrides)
+            matcher = Matcher(
+                self._vedomost,
+                self._strategy,
+                self._overrides,
+                supplier=self._supplier_choice,
+            )
         self._matcher = matcher
         options = ConvertOptions(
             mode=MODE_COMBINED,
@@ -674,6 +787,9 @@ class KonvektorApp(_Base):
             # «Конвертировать» только показывает таблицу; пишет «Сохранить»
             write=write,
             matcher=matcher,
+            sklad=self._sklad,
+            # поставщик для папки: выбранный в диалоге (пусто — из документа)
+            supplier=self._supplier_choice,
         )
 
         self._set_busy(True)
@@ -854,8 +970,9 @@ class KonvektorApp(_Base):
                     text += (
                         "\nСпорные позиции видны в таблице: там две колонки наименования"
                         " («Из документа» и «Из ведомости») и процент совпадения."
-                        " Двойной щелчок по «Из ведомости» — выбрать другое название"
-                        " или вписать своё; пустое значение — оставить название документа."
+                        " Щёлкните «▼» справа от названия — выберите похожую позицию"
+                        " ведомости или «не выбирать (новый товар)»: тогда в файле"
+                        " будет слово «Новинка»."
                     )
             if planned:
                 text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
@@ -925,7 +1042,7 @@ class KonvektorApp(_Base):
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
 
     def _update_preview_columns(self) -> None:
-        """Показать/скрыть колонки «Из ведомости» и «% совпадения»."""
+        """Показать/скрыть колонки «Из ведомости», «▾» и «% совпадения»."""
         with_vedomost = self._vedomost is not None
         columns = PREVIEW_COLUMNS if with_vedomost else PREVIEW_WITHOUT_VED
         try:
@@ -935,7 +1052,7 @@ class KonvektorApp(_Base):
         # подсказка про правку нужна только когда есть что править
         try:
             self.edit_hint.configure(
-                text="двойной щелчок по «" + COLUMN_FROM_VED + "» — изменить название"
+                text="«" + COLUMN_PICK + "» справа от названия — выбрать позицию ведомости"
                 if with_vedomost
                 else ""
             )
@@ -969,11 +1086,14 @@ class KonvektorApp(_Base):
         else:
             from_ved = ""
             score = entry.score_title if entry is not None and entry.skipped else ""
+        if not score and entry is not None:
+            score = "Новинка"
         values = [
             item.barcode or "",
             item.article or "",
             from_doc,
             from_ved,
+            COLUMN_PICK if self._vedomost is not None else "",
             score,
             item.unit or "",
             item.qty,
@@ -1000,36 +1120,168 @@ class KonvektorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             pass
 
-    # ------------------------------------------------- правка названия в таблице
-    def _on_preview_double_click(self, event) -> None:
-        """Двойной щелчок по ячейке «Из ведомости» открывает поле правки."""
+    # ------------------------------------- выбор номенклатуры из ведомости
+    def _on_preview_click(self, event) -> None:
+        """Одиночный щелчок по «▾» открывает список номенклатуры ведомости."""
         if self._vedomost is None or self._matcher is None:
             return
+        target = self._cell_at(event)
+        if target is None:
+            return
+        row_id, title = target
+        if title != COLUMN_PICK:
+            return
+        self.open_chooser(row_id)
+
+    def _on_preview_double_click(self, event) -> None:
+        """Двойной щелчок по «Из ведомости»/«▾» — тот же список."""
+        if self._vedomost is None or self._matcher is None:
+            return
+        target = self._cell_at(event)
+        if target is None:
+            return
+        row_id, title = target
+        if title not in (COLUMN_PICK, COLUMN_FROM_VED):
+            return
+        self.open_chooser(row_id)
+
+    def _cell_at(self, event):
+        """(id строки, название колонки) под курсором или None."""
         try:
             row_id = self.preview.identify_row(event.y)
             column = self.preview.identify_column(event.x)
         except Exception:  # noqa: BLE001 - старая версия Tk
-            return
+            return None
         if not row_id or not column:
-            return
+            return None
         try:
             index = int(str(column).lstrip("#")) - 1
         except ValueError:
-            return
+            return None
         if index < 0 or index >= len(PREVIEW_COLUMNS):
-            return
-        if PREVIEW_COLUMNS[index] != COLUMN_FROM_VED:
-            return
-        self.edit_cell(row_id)
+            return None
+        return row_id, PREVIEW_COLUMNS[index]
 
-    def edit_cell(self, row_id: str) -> None:
-        """Открыть редактор названия поверх ячейки «Из ведомости»."""
+    def open_chooser(self, row_id: str) -> bool:
+        """Показать под ячейкой список похожих позиций ведомости с процентами.
+
+        Первый пункт — «не выбирать (новый товар)», последний — «Своё
+        название…» (ввод текста вручную).
+        """
+        stored = self._preview_rows.get(row_id)
+        if stored is None or self._vedomost is None:
+            return False
+        entry = self._entry_for(stored["key"])
+        if entry is None:
+            return False
+        self._close_chooser()
+        self._cancel_edit()
+
+        items = [("— не выбирать (новый товар) —", None)]
+        for score, row in self._suggestions(entry):
+            label = f"{score:.0%} · {row.nomenclature}"
+            if row.article:
+                label += f" · арт. {row.article}"
+            items.append((label, row))
+        items.append(("Своё название…", CHOICE_CUSTOM))
+
+        bbox = None
+        try:
+            bbox = self.preview.bbox(
+                row_id, f"#{PREVIEW_COLUMNS.index(COLUMN_FROM_VED) + 1}"
+            )
+        except Exception:  # noqa: BLE001 - не критично
+            bbox = None
+        x = y = 0
+        width = 460
+        if bbox:
+            x = int(bbox[0])
+            y = int(bbox[1] + bbox[3])
+            width = max(360, int(bbox[2]) + 60)
+        try:
+            left = self.preview.winfo_rootx() + x
+            top = self.preview.winfo_rooty() + y
+        except Exception:  # noqa: BLE001 - не критично
+            left = top = 100
+        self._chooser_row = row_id
+        self._chooser = _VedChooser(self, left, top, width, items, self._chooser_picked)
+        self._watch_popup(row_id, bbox)
+        return True
+
+    def _chooser_picked(self, value) -> None:
+        """Пользователь выбрал строку в списке."""
+        row_id = self._chooser_row
+        self._close_chooser()
+        if row_id is None:
+            return
         stored = self._preview_rows.get(row_id)
         if stored is None:
             return
         entry = self._entry_for(stored["key"])
         if entry is None:
-            # сверки для этой позиции нет — править нечего
+            return
+        if value is CHOICE_CUSTOM:
+            # своё название: обычное поле ввода поверх ячейки
+            self.edit_cell(row_id)
+            return
+        self._overrides[stored["key"]] = value
+        self._apply_edit_locally(stored, entry)
+        self._refresh_row(row_id, stored)
+        what = "не выбирать (новый товар)" if value is None else getattr(value, "nomenclature", "")
+        self.hint_var.set(f"Выбрано: {what} — не забудьте «Сохранить».")
+
+    def _close_chooser(self) -> None:
+        chooser, self._chooser = self._chooser, None
+        self._chooser_row = None
+        if chooser is not None:
+            self._cancel_popup_watch()
+        if chooser is not None:
+            try:
+                chooser.close()
+            except Exception:  # noqa: BLE001 - уже закрыт
+                pass
+
+    def _close_popups(self) -> None:
+        """Закрыть всё, что «висит» над таблицей (список и поле ввода)."""
+        self._close_chooser()
+        self._cancel_edit()
+
+    def _on_preview_wheel(self, event):
+        """Колесо мыши: закрыть список/поле и прокрутить таблицу."""
+        self._close_popups()
+        delta = 0
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        elif getattr(event, "delta", 0):
+            delta = -1 if event.delta > 0 else 1
+        if delta:
+            try:
+                self.preview.yview_scroll(delta, "units")
+            except Exception:  # noqa: BLE001 - не критично
+                pass
+        return "break"
+
+    def _preview_yview(self, *args):
+        self._close_popups()
+        return self.preview.yview(*args)
+
+    def _preview_xview(self, *args):
+        self._close_popups()
+        return self.preview.xview(*args)
+
+    def _cancel_edit(self) -> None:
+        """Убрать поле ввода без сохранения (прокрутка, Esc, новый выбор)."""
+        self._destroy_editor()
+
+    def edit_cell(self, row_id: str) -> None:
+        """Поле ввода названия поверх ячейки «Из ведомости» (свой текст)."""
+        stored = self._preview_rows.get(row_id)
+        if stored is None:
+            return
+        entry = self._entry_for(stored["key"])
+        if entry is None:
             return
         try:
             bbox = self.preview.bbox(row_id, f"#{PREVIEW_COLUMNS.index(COLUMN_FROM_VED) + 1}")
@@ -1039,6 +1291,7 @@ class KonvektorApp(_Base):
             return
         x, y, width, height = bbox
         suggestions = [row.nomenclature for _score, row in self._suggestions(entry)]
+        self._cancel_edit()
         self._edit_var = tk.StringVar(value=self._current_from_ved(stored))
         self._editor = ttk.Combobox(
             self.preview, textvariable=self._edit_var, values=suggestions
@@ -1047,12 +1300,54 @@ class KonvektorApp(_Base):
             self._editor.place(x=x, y=y, width=max(width, 280), height=height)
             self._editor.focus_set()
             self._editor.bind("<Return>", lambda _e: self.commit_edit())
-            self._editor.bind("<FocusOut>", lambda _e: self.commit_edit())
-            self._editor.bind("<Escape>", lambda _e: self.cancel_edit())
-        except Exception:  # noqa: BLE001 - без редактора таблица остаётся
+            self._editor.bind("<Escape>", lambda _e: self._cancel_edit())
+            self._editor.bind("<MouseWheel>", self._on_preview_wheel)
+        except Exception:  # noqa: BLE001 - без поля таблица остаётся
             self._editor = None
             return
         self._editing = row_id
+        self._watch_popup(row_id, bbox)
+
+    # ------------------------------------- «окно не должно висеть на месте»
+    def _watch_popup(self, row_id: str, bbox) -> None:
+        """Запомнить, где было окно, и следить, не уехала ли строка."""
+        self._popup_row = row_id
+        self._popup_y = int(bbox[1]) if bbox else 0
+        self._popup_watch = None
+        try:
+            self._popup_watch = self.after(150, self._check_popup)
+        except Exception:  # noqa: BLE001 - не критично
+            self._popup_watch = None
+
+    def _check_popup(self) -> None:
+        """Закрыть список/поле, если строка прокрутилась или исчезла."""
+        if self._chooser is None and getattr(self, "_editor", None) is None:
+            self._popup_row = None
+            return
+        row_id = self._popup_row
+        moved = True
+        if row_id:
+            try:
+                box = self.preview.bbox(row_id, "#1")
+            except Exception:  # noqa: BLE001 - не критично
+                box = ""
+            moved = not box or int(box[1]) != int(self._popup_y)
+        if moved:
+            self._close_popups()
+            return
+        try:
+            self._popup_watch = self.after(150, self._check_popup)
+        except Exception:  # noqa: BLE001 - не критично
+            self._popup_watch = None
+
+    def _cancel_popup_watch(self) -> None:
+        watch, self._popup_watch = getattr(self, "_popup_watch", None), None
+        self._popup_row = None
+        if watch is not None:
+            try:
+                self.after_cancel(watch)
+            except Exception:  # noqa: BLE001 - уже сработал
+                pass
 
     def _suggestions(self, entry):
         """Похожие номенклатуры ведомости — подсказкой в выпадающем списке."""
@@ -1076,8 +1371,14 @@ class KonvektorApp(_Base):
             return entry.name
         return ""
 
+    def cancel_edit(self) -> None:
+        """Публичный отказ от правки (Esc в окне)."""
+        self._destroy_editor()
+
     def _destroy_editor(self) -> None:
         editor = getattr(self, "_editor", None)
+        if editor is not None:
+            self._cancel_popup_watch()
         self._editor = None
         self._editing = None
         if editor is not None:
@@ -1089,9 +1390,6 @@ class KonvektorApp(_Base):
             self.preview.focus_set()
         except Exception:  # noqa: BLE001 - не критично
             pass
-
-    def cancel_edit(self) -> None:
-        self._destroy_editor()
 
     def commit_edit(self) -> None:
         """Записать выбранное/вписанное название и перерисовать строку."""
@@ -1143,6 +1441,9 @@ class KonvektorApp(_Base):
         """Сразу показать правку в таблице (файл пишется при «Сохранить»)."""
         item = stored["item"]
         override = self._overrides.get(stored["key"], _NO_OVERRIDE)
+        if override is not _NO_OVERRIDE:
+            # «не выбирать» = товара нет в ведомости -> в файле слово «Новинка»
+            item.novinka = override is None
         if override is _NO_OVERRIDE or override is None:
             item.name = entry.doc_name
             item.article = entry.doc_article or ""
@@ -1192,7 +1493,7 @@ class KonvektorApp(_Base):
         return str(value)
 
     def _clear_preview(self) -> None:
-        self._destroy_editor()
+        self._close_popups()
         self._preview_rows.clear()
         for child in self.preview.get_children():
             self.preview.delete(child)

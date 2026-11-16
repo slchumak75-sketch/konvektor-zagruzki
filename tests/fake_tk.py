@@ -86,6 +86,12 @@ class Widget:
     def after(self, ms, func=None, *args):
         return None
 
+    def winfo_rootx(self):
+        return 0
+
+    def winfo_rooty(self):
+        return 0
+
     def winfo_screenwidth(self):
         return 1920
 
@@ -183,6 +189,12 @@ class Toplevel(Widget):
         return None
 
     def resizable(self, *a, **k):
+        return None
+
+    def overrideredirect(self, *a, **k):
+        return None
+
+    def focus_force(self):
         return None
 
     def destroy(self):
@@ -531,6 +543,7 @@ def install() -> types.ModuleType:
         "Button",
         "Entry",
         "Checkbutton",
+        "Radiobutton",
         "Scrollbar",
         "Separator",
         "Notebook",

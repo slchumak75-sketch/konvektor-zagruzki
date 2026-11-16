@@ -415,3 +415,118 @@ def test_unavailable_folder_raises_clear_error(known_paths, tmp_path):
         convert([str(path)], "", ConvertOptions(naming="auto", output_dir=bogus))
     assert "недоступна для записи" in str(exc.value)
     assert "Куда сохранить" in str(exc.value)
+
+
+# ------------------------------------------- папка «склад / поставщик / дата»
+def test_output_path_with_sklad_and_supplier():
+    """1.7.0: при выбранном складе — <папка>/<склад>/<поставщик>/<дата>.xlsx."""
+    import datetime as dt
+
+    from konvektor.meta import DocMeta
+    from konvektor.pipeline import output_path_for
+
+    day = dt.date(2026, 11, 15)
+    meta = DocMeta(supplier='ООО "ОМА"')
+    path = output_path_for(meta, "/tmp/база", date=day, sklad="Мир")
+    assert path == os.path.join("/tmp/база", "Мир", "ООО ОМА", "15.11.2026.xlsx"), path
+
+    # поставщик, выбранный пользователем, важнее найденного в документе
+    path = output_path_for(meta, "/tmp/база", date=day, sklad="Кореличи", supplier="ООО ТД Комплект")
+    assert path == os.path.join("/tmp/база", "Кореличи", "ООО ТД Комплект", "15.11.2026.xlsx")
+
+    # поставщика нет ни там, ни там — понятное имя папки
+    path = output_path_for(DocMeta(), "/tmp/база", date=day, sklad="Мир")
+    assert path.endswith(os.path.join("Мир", "Поставщик не определён", "15.11.2026.xlsx"))
+
+    # без склада — прежнее имя файла
+    assert output_path_for(meta, "/tmp/база", date=day).endswith("ООО ОМА 15.11.2026.xlsx")
+
+
+def test_convert_puts_file_into_sklad_supplier_folder(known_paths, tmp_path):
+    """Конвертация со складом кладёт файл в подпапки и не перезаписывает старый."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    options = ConvertOptions(naming="auto", output_dir=str(tmp_path), sklad="Кореличи")
+    first = convert([str(path)], "", options)
+    assert first.outputs, first.notes
+    today = f"{dt.date.today():%d.%m.%Y}"
+    expected = tmp_path / "Кореличи" / "ООО ОМА" / f"{today}.xlsx"
+    assert first.outputs[0] == str(expected)
+    assert expected.exists()
+
+    second = convert([str(path)], "", options)
+    assert second.outputs[0] != first.outputs[0]
+    assert expected.exists()  # первый файл не тронут
+
+
+# ------------------------------------------------ колонка «Новинка» (1.7.0)
+def _write_small_vedomost(tmp_path, rows):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.append([])
+    sheet.append(["Ведомость по остаткам ТМЦ на складах"])
+    sheet.append([])
+    sheet.append([
+        "Склад", "Группа", "Артикул", "Номенклатура", "Ед. изм.",
+        "Расход", "Остаток", "Цена", "Цена посл. поставщика", "Розн.", "Последний поставщик",
+    ])
+    for row in rows:
+        sheet.append(list(row))
+    path = tmp_path / "Ведомость.xlsx"
+    book.save(path)
+    return str(path)
+
+
+def test_novinka_column_in_file(known_paths, tmp_path):
+    """Позиция, которую не выбрали в ведомости, пишется словом «Новинка»."""
+    from konvektor.vedomost import MATCH_NAME, Matcher, load_vedomost
+
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    ved_path = _write_small_vedomost(tmp_path, [
+        ["Склад Мир", "ГАЗ", "", "Газ сжижен.в однораз.баллоне WERKER 520см3", "шт", "7", "3,20", "", "", "", 'ООО "ОМА"'],
+    ])
+    vedomost = load_vedomost(ved_path)
+    matcher = Matcher(vedomost, MATCH_NAME, {})
+
+    result = convert(
+        [str(path)],
+        "",
+        ConvertOptions(
+            naming="auto",
+            output_dir=str(tmp_path / "итог"),
+            matcher=matcher,
+        ),
+    )
+    assert result.outputs, result.notes
+    sheet = load_workbook(result.outputs[0])["Данные"]
+    header = [cell for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+    assert "Новинка" in header
+    assert header.index("Новинка") == header.index("сумма с НДС") + 1
+    # после «сумма с НДС» в файле ничего, кроме «Новинка»
+    assert header[header.index("Новинка") + 1:] == []
+    column = header.index("Новинка")
+    values = [row[column] for row in sheet.iter_rows(min_row=2, values_only=True)]
+    assert "Новинка" in values
+    # подобралась только «Газ»: у подобранных позиций клетка пустая,
+    # у остальных — слово «Новинка»
+    assert 0 < values.count("Новинка") < len(values)
+    assert all(value in (None, "Новинка") for value in values), values
+
+
+def test_no_novinka_column_without_vedomost(known_paths, tmp_path):
+    """Без сверки в файле прежние 10 колонок — «Новинка» не появляется."""
+    path = next((p for p in known_paths if p.name.startswith("Кореличи")), None)
+    if path is None:
+        pytest.skip("нет файла-образца")
+    result = convert([str(path)], "", ConvertOptions(naming="auto", output_dir=str(tmp_path)))
+    assert result.outputs, result.notes
+    header = list(
+        next(load_workbook(result.outputs[0])["Данные"].iter_rows(min_row=1, max_row=1, values_only=True))
+    )
+    assert "Новинка" not in header
+    assert header == list(TEMPLATE_COLUMNS)
