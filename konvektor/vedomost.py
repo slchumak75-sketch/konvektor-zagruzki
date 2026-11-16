@@ -955,6 +955,13 @@ class Matcher:
         for scope in scopes:
             for kind in MATCH_ORDER[self.strategy]:
                 found = self.vedomost.find(name, article, barcode, kind, scope)
+                if (
+                    found is not None
+                    and self.sklad
+                    and found[0].sklad
+                    and self.sklad not in found[0].sklad.lower()
+                ):
+                    found = None
                 if found is None:
                     continue
                 row, score = found
