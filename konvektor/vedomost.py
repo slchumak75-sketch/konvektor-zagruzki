@@ -252,9 +252,9 @@ def _score_words(
     # значит в документе просто длинное описание («Средство родентицидное ...»).
     head_doc = next((t for t in doc_tokens if not t.isdigit()), "")
     head_ved = next((t for t in ved_tokens if not t.isdigit()), "")
-    if cover_ved < 0.85 and head_doc and head_ved and _token_pair(head_doc, head_ved) < 0.5:
+    if cover_ved < 0.75 and head_doc and head_ved and _token_pair(head_doc, head_ved) < 0.5:
         score *= 0.7
-    if cover_ved >= 0.85 and not (numbers_doc and numbers_ved and not (numbers_doc & numbers_ved)):
+    if cover_ved >= 0.75 and not (numbers_doc and numbers_ved and not (numbers_doc & numbers_ved)):
         score = max(score, 0.85 * cover_ved)
 
     units = (norm_text(unit)[:2], norm_text(ved_unit)[:2])
