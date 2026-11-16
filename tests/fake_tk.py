@@ -53,6 +53,9 @@ class Widget:
     def rowconfigure(self, *a, **k):
         return None
 
+    def __setitem__(self, key, value):
+        self.options[key] = value
+
     def configure(self, *a, **k):
         self.options.update(k)
         return None
@@ -534,6 +537,42 @@ def install() -> types.ModuleType:
                 TEXTS.append(str(k["text"]))
             RECORDS.append(dict(k))
 
+    class Menu(Widget):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.items: List[Dict[str, object]] = []
+
+        def add_command(self, **k):
+            self.items.append(dict(k))
+            if "label" in k:
+                TEXTS.append(str(k["label"]))
+                RECORDS.append({"text": str(k["label"]), **k})
+
+        def add_separator(self):
+            self.items.append({"separator": True})
+
+        def entryconfigure(self, index: int, **k):
+            if 0 <= index < len(self.items):
+                self.items[index].update(k)
+
+        def entrycget(self, index: int, key: str):
+            if 0 <= index < len(self.items):
+                return self.items[index].get(key)
+            return None
+
+    class Canvas(Widget):
+        def create_window(self, *a, **k):
+            return 1
+
+        def yview(self, *a, **k):
+            return (0.0, 1.0)
+
+        def bbox(self, *a, **k):
+            return (0, 0, 100, 100)
+
+    tk.Menu = Menu
+    tk.Canvas = Canvas
+
     TEXTS.clear()
     RECORDS.clear()
     for name in (
@@ -541,6 +580,7 @@ def install() -> types.ModuleType:
         "Label",
         "LabelFrame",
         "Button",
+        "Menubutton",
         "Entry",
         "Checkbutton",
         "Radiobutton",

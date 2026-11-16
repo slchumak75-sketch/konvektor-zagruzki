@@ -485,7 +485,11 @@ def test_three_convert_buttons(gui):
     """Три кнопки конвертации: по штрихкоду, по артикулу, по наименованию."""
     app, module, _ = gui
     assert set(app.convert_buttons) == {MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME}
-    texts = [t for t in fake_tk.TEXTS if t.startswith("Конвертировать ")]
+    texts = [
+        t
+        for t in fake_tk.TEXTS
+        if t.startswith("Конвертировать ") and t != "Конвертировать ▾"
+    ]
     assert texts == [
         "Конвертировать по штрихкоду",
         "Конвертировать по артикулу",
@@ -799,12 +803,12 @@ def test_step_cards_use_compact_buttons(gui):
     texts = [str(record.get("text", "")) for record in fake_tk.RECORDS]
     assert "Выбрать файл…" in texts
     assert any("Загрузить ведомость" in text for text in texts)
-    assert "Обзор…" in texts
-    # все кнопки этих плашек — компактные
-    assert len(compact) >= 3
-    # мелкие подписи полей
-    small = [r for r in fake_tk.RECORDS if r.get("style") == "Small.TLabel"]
-    assert len(small) >= 3
+    assert "Папка сохранения…" in texts
+    # кнопки сгруппированы в выпадающие меню на синем заголовке
+    header_menus = [
+        record for record in fake_tk.RECORDS if record.get("style") in ("Header.TMenubutton", "HeaderPrimary.TMenubutton")
+    ]
+    assert len(header_menus) >= 3
 
 
 # -------------------------------------------- склад и поставщик (диалог 1.7.0)
@@ -824,13 +828,14 @@ def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
     dialog = _dialog(app)
     # склады заказчика
     assert list(dialog.sklad_buttons) == ["Мир", "Кореличи"]
-    # в списке поставщиков — «как в документе» и все поставщики ведомости
-    values = list(dialog.supplier_box.options.get("values") or [])
+    # в списке поставщиков — «как в документе» и все поставщики ведомости (галочки)
+    values = list(dialog.supplier_checks)
     assert values[0].startswith("— как в документе")
     assert 'ООО "ОМА"' in values
 
     dialog.sklad_var.set("Кореличи")
-    dialog.supplier_var.set('ООО "ОМА"')
+    dialog.supplier_vars['ООО "ОМА"'].set(True)
+    dialog._on_supplier_toggle('ООО "ОМА"')
     dialog.on_ok()
     assert app._sklad == "Кореличи"
     assert app._supplier_choice == 'ООО "ОМА"'
@@ -865,10 +870,9 @@ def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
 
 
 def test_source_line_is_visible_in_window(gui):
-    """Строка «Склад и поставщик» есть в окне и её можно изменить."""
+    """Пункт «Склад и поставщик…» есть в окне и его можно изменить."""
     app, _, _ = gui
-    assert "Склад и поставщик:" in fake_tk.TEXTS
-    assert "Изменить…" in fake_tk.TEXTS
+    assert "Склад и поставщик…" in fake_tk.TEXTS
     app._source_chosen("Кореличи", "")
     assert app.source_var.get() == "Кореличи / как в документе"
 
