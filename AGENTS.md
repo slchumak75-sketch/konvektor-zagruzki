@@ -57,12 +57,12 @@ Windows-программа (Python + tkinter + PyInstaller), которая пр
 | Добавить проверку арифметики | `konvektor/validate.py` | `_check_item`, `_fill` |
 | Изменить вид итоговой книги | `konvektor/writer.py` | `_write_data_sheet`, `_write_issues_sheet`, `_write_summary_sheet` |
 | Режимы (combined/sheets/files) | `konvektor/pipeline.py` | `convert` |
-| Интерфейс окна | `konvektor/gui.py` | `KonvektorApp` (один файл, предпросмотр таблицы) |
+| Интерфейс окна | `konvektor/gui.py` | `KonvektorApp` (предпросмотр таблицы, две колонки наименования) |
 | Имя результата «поставщик/дата» | `konvektor/pipeline.py` | `output_path_for`, `safe_path_part`, `ConvertOptions.naming` |
 | Поставщик — не наша организация | `konvektor/meta.py` | `_supplier_and_buyer`, `is_our_company`, `our_companies`, `DEFAULT_OUR_COMPANIES` |
 | Сверка с ведомостью остатков ТМЦ | `konvektor/vedomost.py` | `parse_vedomost`, `Vedomost.candidates`, `Matcher` |
 | Пороги и оценка похожести названий | `konvektor/vedomost.py` | `similarity`, `AUTO_SCORE`, `CONFIDENT_SCORE`, `_token_pair` |
-| Окно ручного выбора номенклатуры | `konvektor/review.py` | `ReviewDialog` |
+| Правка названия прямо в таблице | `konvektor/gui.py` | `edit_cell`, `commit_edit`, `_preview_values` |
 | Ключи командной строки | `konvektor/cli.py` | `build_parser`, `main` (`--vedomost`, `--match`) |
 | Сборка/CI | `.github/workflows/build.yml` | — |
 

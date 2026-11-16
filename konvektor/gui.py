@@ -25,7 +25,7 @@ import threading
 import traceback
 from typing import List, Optional
 
-from . import APP_NAME, TEMPLATE_COLUMNS, __version__
+from . import APP_NAME, __version__
 from .extract import Item
 from .pipeline import (
     MODE_COMBINED,
@@ -35,7 +35,15 @@ from .pipeline import (
     documents_dir,
     is_supported,
 )
-from .vedomost import MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME, MATCH_TITLES, Matcher, load_vedomost
+from .vedomost import (
+    AUTO_SCORE,
+    MATCH_ARTICLE,
+    MATCH_BARCODE,
+    MATCH_NAME,
+    MATCH_TITLES,
+    Matcher,
+    load_vedomost,
+)
 from .writer import plain_number
 
 try:  # pragma: no cover - зависит от сборки Python
@@ -74,12 +82,38 @@ FILE_TYPES = [
     ("Все файлы", "*.*"),
 ]
 
-#: Колонки предпросмотра — только шаблон (лишних колонок в окне нет;
-#: «файл» и «строка» остаются только в сохранённом файле).
-PREVIEW_COLUMNS = list(TEMPLATE_COLUMNS)
+#: В окне две колонки наименования — «из документа» и «из ведомости» — и
+#: процент совпадения: так видно, что было в счёте и что подобрала программа.
+#: В сохранённом файле по-прежнему ровно 10 колонок образца (см. TEMPLATE_COLUMNS).
+COLUMN_FROM_DOC = "Из документа"
+COLUMN_FROM_VED = "Из ведомости"
+COLUMN_SCORE = "% совпадения"
+#: Колонки, которые показываются только при загруженной ведомости.
+_VED_ONLY_COLUMNS = (COLUMN_FROM_VED, COLUMN_SCORE)
+
+PREVIEW_COLUMNS = [
+    "Штрихкод",
+    "Артикул",
+    COLUMN_FROM_DOC,
+    COLUMN_FROM_VED,
+    COLUMN_SCORE,
+    "ед. изм.",
+    "количество",
+    "цена",
+    "сумма",
+    "ставка НДС",
+    "сумма НДС",
+    "сумма с НДС",
+]
 #: Ширины — в пикселях (у Treeview width именно пиксели, а не символы).
-PREVIEW_WIDTHS = [125, 105, 380, 75, 85, 95, 105, 85, 105, 115]
-PREVIEW_MIN_WIDTHS = [90, 70, 160, 55, 60, 70, 80, 60, 80, 90]
+#: Числовые колонки и «ед. изм.» в полтора раза уже, чем были: они короткие,
+#: а место нужно двум колонкам наименования.
+PREVIEW_WIDTHS = [110, 95, 320, 320, 85, 50, 62, 63, 70, 60, 70, 68]
+PREVIEW_MIN_WIDTHS = [85, 70, 150, 150, 60, 40, 45, 50, 55, 45, 55, 60]
+#: Показываемые колонки без ведомости: без «из ведомости» и «% совпадения».
+PREVIEW_WITHOUT_VED = [
+    title for title in PREVIEW_COLUMNS if title not in _VED_ONLY_COLUMNS
+]
 #: Цвет линий таблицы
 GRID_COLOR = "#9DB2C8"
 #: Числовые колонки выравниваем по правому краю, как в Excel.
@@ -91,6 +125,9 @@ _WHOLE_PREVIEW = {"количество", "ставка НДС"}
 
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
+
+#: «решения нет» — отличается от None, которым помечено «не выбирать»
+_NO_OVERRIDE = object()
 
 #: Оформление окна: спокойный светлый фон, тёмная шапка, один акцент.
 NAVY = "#1F3A5F"
@@ -135,6 +172,12 @@ class KonvektorApp(_Base):
         self._strategy = MATCH_NAME
         self._matcher: Optional[Matcher] = None
         self._overrides: dict = {}
+        # строки таблицы: id строки -> {"item": позиция, "key": ключ сверки}
+        self._preview_rows: dict = {}
+        # открытый редактор названия (Combobox поверх ячейки)
+        self._editor = None
+        self._edit_var = None
+        self._editing: Optional[str] = None
 
         self._set_window_icon()
         self._build_ui()
@@ -191,49 +234,47 @@ class KonvektorApp(_Base):
         body = tk.Frame(self, background=BG)
         body.pack(fill="both", expand=True, padx=16, pady=14)
 
-        # --- шаг 1: файл и ведомость (компактно, без пояснений)
-        top = self._card(body, "ШАГ 1 · Файл и ведомость")
+        # --- шаг 1: файл и ведомость (плашка минимальной высоты)
+        top = self._card(body, "ШАГ 1 · Файл и ведомость", gap=6)
         row = ttk.Frame(top, style="Card.TFrame")
-        row.pack(fill="x", padx=14, pady=(10, 6))
-        ttk.Label(row, text="Файл:", style="Card.TLabel").pack(side="left")
+        row.pack(fill="x", padx=10, pady=(4, 2))
+        ttk.Label(row, text="Файл:", style="Small.TLabel").pack(side="left")
         self.file_var = tk.StringVar(value="файл не выбран")
         ttk.Label(
             row, textvariable=self.file_var, style="File.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True, padx=(8, 8))
+        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ttk.Button(
-            row, text="Выбрать файл…", style="Secondary.TButton",
+            row, text="Выбрать файл…", style="Compact.TButton",
             command=self.on_add_files,
         ).pack(side="right")
 
         vrow = ttk.Frame(top, style="Card.TFrame")
-        vrow.pack(fill="x", padx=14, pady=(0, 10))
-        ttk.Label(vrow, text="Ведомость:", style="Card.TLabel").pack(side="left")
+        vrow.pack(fill="x", padx=10, pady=(0, 4))
+        ttk.Label(vrow, text="Ведомость:", style="Small.TLabel").pack(side="left")
         self.ved_var = tk.StringVar(value="не загружена")
         ttk.Label(
-            vrow, textvariable=self.ved_var, style="Ved.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True, padx=(8, 8))
+            vrow, textvariable=self.ved_var, style="VedSmall.TLabel", anchor="w"
+        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ttk.Button(
-            vrow, text="Загрузить ведомость…", style="Secondary.TButton",
+            vrow, text="Загрузить ведомость…", style="Compact.TButton",
             command=self.on_load_vedomost,
         ).pack(side="right")
 
-        # --- шаг 2: куда сохранить
-        mid = self._card(body, "ШАГ 2 · Куда сохранить")
+        # --- шаг 2: куда сохранить (тоже одна строка, без пояснений)
+        mid = self._card(body, "ШАГ 2 · Куда сохранить", gap=6)
         prow = ttk.Frame(mid, style="Card.TFrame")
-        prow.pack(fill="x", padx=14, pady=(10, 4))
-        ttk.Label(prow, text="Путь:", style="Card.TLabel").pack(side="left")
+        prow.pack(fill="x", padx=10, pady=(4, 4))
+        ttk.Label(prow, text="Путь:", style="Small.TLabel").pack(side="left")
         # обычное поле пути, как в любой программе Windows: можно вписать любую
         # папку (в том числе на другом диске), можно стереть — тогда «Документы»
         self.out_var = tk.StringVar(value=documents_dir())
         ttk.Entry(prow, textvariable=self.out_var, style="Path.TEntry").pack(
-            side="left", fill="x", expand=True, padx=8
+            side="left", fill="x", expand=True, padx=6
         )
         # «Обзор…» — привычный выбор папки; поле остаётся обычным
         ttk.Button(
-            prow, text="Обзор…", style="Secondary.TButton", command=self.on_browse_output
+            prow, text="Обзор…", style="Compact.TButton", command=self.on_browse_output
         ).pack(side="left")
-
-        prow.pack_configure(pady=(10, 10))
 
         # --- кнопки: три способа сверки, затем сохранение и открытие
         act = ttk.Frame(body, style="Card.TFrame")
@@ -261,11 +302,13 @@ class KonvektorApp(_Base):
             command=self.on_save, state="disabled",
         )
         self.save_btn.pack(side="left")
-        self.review_btn = ttk.Button(
-            tools_row, text="Сверить с ведомостью…", style="Secondary.TButton",
-            command=self.on_review, state="disabled",
+        # подсказка про правку названия прямо в таблице (одна строка, не мешает)
+        self.edit_hint = ttk.Label(
+            tools_row,
+            text="двойной щелчок по «Из ведомости» — изменить название",
+            style="Hint.TLabel",
         )
-        self.review_btn.pack(side="left", padx=(10, 0))
+        self.edit_hint.pack(side="left", padx=(14, 0))
 
         self.open_folder_btn = ttk.Button(
             tools_row, text="Открыть папку", style="Ghost.TButton",
@@ -303,6 +346,10 @@ class KonvektorApp(_Base):
         # «разлиновка»: чередование строк, как в Excel
         self.preview.tag_configure("odd", background=ROW_ODD)
         self.preview.tag_configure("even", background=CARD)
+        # строки, где название выбрано/вписано вручную — светло-жёлтые
+        self.preview.tag_configure("manual", background="#FFF7E0")
+        # без ведомости двух «лишних» колонок нет — таблица как раньше, 10 колонок
+        self.preview.configure(displaycolumns=list(PREVIEW_WITHOUT_VED))
         for title, width, min_width in zip(
             PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS
         ):
@@ -322,6 +369,8 @@ class KonvektorApp(_Base):
         yscroll.pack(side="right", fill="y")
         xscroll.pack(side="bottom", fill="x")
         self.preview.pack(side="left", fill="both", expand=True)
+        # название можно править прямо в таблице: двойной щелчок по «Из ведомости»
+        self.preview.bind("<Double-1>", self._on_preview_double_click)
 
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
@@ -354,10 +403,10 @@ class KonvektorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             pass
 
-    def _card(self, parent, title: str):
-        """Белая карточка раздела с подписью-шагом."""
+    def _card(self, parent, title: str, gap: int = 10):
+        """Белая карточка раздела с подписью-шагом (gap — отступ снизу)."""
         frame = ttk.LabelFrame(parent, text=title, style="Card.TLabelframe")
-        frame.pack(fill="x", pady=(0, 10))
+        frame.pack(fill="x", pady=(0, gap))
         return frame
 
     def _header_icon(self, parent):
@@ -396,7 +445,10 @@ class KonvektorApp(_Base):
                 background=BG,
                 foreground=NAVY,
                 font=("Segoe UI", 9, "bold"),
+                padding=(0, 0),
             )
+            # узкие плашки: минимум внутренних отступов у рамки
+            style.configure("Card.TLabelframe", padding=(2, 2))
             style.configure(
                 "Header.TLabel",
                 background=NAVY,
@@ -428,76 +480,22 @@ class KonvektorApp(_Base):
                 foreground=OK_GREEN,
                 font=("Segoe UI", 9),
             )
-            # --- окно ручной сверки (konvektor/review.py)
-            style.configure("Review.TFrame", background=BG)
-            style.configure("Review.TLabel", background=BG, foreground=TEXT)
-            style.configure("ReviewHint.TLabel", background=BG, foreground=MUTED)
+            # компактные кнопки и подписи для узких плашек ШАГ 1 / ШАГ 2
             style.configure(
-                "Review.TLabelframe",
-                background=CARD,
-                bordercolor=BORDER,
-                relief="solid",
-                borderwidth=1,
-            )
-            style.configure(
-                "Review.TLabelframe.Label",
-                background=BG,
-                foreground=NAVY,
-                font=("Segoe UI", 9, "bold"),
-            )
-            style.configure(
-                "Review.TButton",
+                "Compact.TButton",
                 font=("Segoe UI", 9),
-                padding=(10, 6),
+                padding=(10, 2),
                 background=CARD,
                 foreground=NAVY,
                 bordercolor=BORDER,
             )
-            style.map("Review.TButton", background=[("active", "#E8EEF8")])
+            style.map("Compact.TButton", background=[("active", "#E8EEF8")])
             style.configure(
-                "ReviewPrimary.TButton",
-                font=("Segoe UI", 9, "bold"),
-                padding=(12, 7),
-                background=ACCENT,
-                foreground="#FFFFFF",
-                borderwidth=0,
-            )
-            style.map(
-                "ReviewPrimary.TButton",
-                background=[("disabled", "#B9C7DA"), ("active", ACCENT_DARK)],
-                foreground=[("disabled", "#F0F4FA")],
+                "Small.TLabel", background=CARD, foreground=TEXT, font=("Segoe UI", 9)
             )
             style.configure(
-                "Primary.TButton",
-                font=("Segoe UI", 10, "bold"),
-                padding=(20, 9),
-                background=ACCENT,
-                foreground="#FFFFFF",
-                borderwidth=0,
+                "VedSmall.TLabel", background=CARD, foreground=OK_GREEN, font=("Segoe UI", 9)
             )
-            style.map(
-                "Primary.TButton",
-                background=[("disabled", "#B9C7DA"), ("active", ACCENT_DARK)],
-                foreground=[("disabled", "#F0F4FA")],
-            )
-            style.configure(
-                "Secondary.TButton",
-                font=("Segoe UI", 10),
-                padding=(16, 8),
-                background=CARD,
-                foreground=NAVY,
-                bordercolor=BORDER,
-            )
-            style.map("Secondary.TButton", background=[("active", "#E8EEF8")])
-            style.configure(
-                "Ghost.TButton",
-                font=("Segoe UI", 9),
-                padding=(12, 7),
-                background=BG,
-                foreground=MUTED,
-                borderwidth=0,
-            )
-            style.map("Ghost.TButton", background=[("active", "#E6ECF5")])
             style.configure("Path.TEntry", padding=(6, 5), fieldbackground=CARD)
             style.configure("TSeparator", background=BORDER)
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
@@ -523,8 +521,9 @@ class KonvektorApp(_Base):
                 foreground="#1F4E78",
                 relief="raised",
                 borderwidth=1,
-                padding=(4, 4),
-                font=("Segoe UI", 9, "bold"),
+                padding=(2, 3),
+                # 8 пт: узкие числовые колонки подписываются без обрезки
+                font=("Segoe UI", 8, "bold"),
             )
             style.map("Grid.Treeview.Heading", background=[("active", "#CFE0F5")])
             style.map("Grid.Treeview", background=[("selected", "#BBDEFB")])
@@ -578,7 +577,6 @@ class KonvektorApp(_Base):
         # ручные решения относились к прошлой ведомости — сбрасываем
         self._overrides = {}
         self._matcher = None
-        self.review_btn.configure(state="disabled")
         self.ved_var.set(self._vedomost_text(vedomost))
         hint = (
             f"Ведомость загружена: {os.path.basename(path)}. "
@@ -680,7 +678,6 @@ class KonvektorApp(_Base):
 
         self._set_busy(True)
         self.save_btn.configure(state="disabled")
-        self.review_btn.configure(state="disabled")
         self._pending_source = path
         self._pending_out = folder
         if not write:
@@ -726,31 +723,6 @@ class KonvektorApp(_Base):
         self._pending_out = self.output_dir()
         self._start_convert(path, self._strategy, write=True)
 
-    def on_review(self) -> None:
-        """Открыть окно ручного выбора номенклатуры из ведомости."""
-        if self._vedomost is None:
-            messagebox.showinfo(APP_NAME, "Сначала нажмите «Загрузить ведомость…».")
-            return
-        if self._matcher is None or not self._matcher.entries:
-            messagebox.showinfo(
-                APP_NAME, "Сначала конвертируйте файл — сверять пока нечего."
-            )
-            return
-        try:
-            from .review import ReviewDialog
-
-            ReviewDialog(self, self._matcher, on_done=self._overrides_done)
-        except Exception as exc:  # noqa: BLE001 - окно не должно ронять программу
-            messagebox.showwarning(APP_NAME, f"Не удалось открыть окно сверки:\n{exc}")
-
-    def _overrides_done(self, overrides: dict) -> None:
-        """Пользователь закрыл окно сверки — пересобрать таблицу с его выбором."""
-        if overrides == self._overrides:
-            return
-        self._overrides = dict(overrides)
-        if self._pending_source and os.path.exists(self._pending_source):
-            self._start_convert(self._pending_source, self._strategy, write=False)
-
     def on_open_result(self) -> None:
         """Открыть сохранённый файл в Excel (или чем он открыт в системе)."""
         path = self._last_outputs[0] if self._last_outputs else ""
@@ -783,9 +755,6 @@ class KonvektorApp(_Base):
     def _saved(self, result: ConvertResult) -> None:
         self._set_busy(False)
         self.save_btn.configure(state="normal")
-        self.review_btn.configure(
-            state="normal" if self._matcher is not None else "disabled"
-        )
         self._last_outputs = list(result.outputs)
         if not result.outputs:
             messagebox.showwarning(APP_NAME, "; ".join(result.errors) or "Файл не записан.")
@@ -833,8 +802,7 @@ class KonvektorApp(_Base):
         self._last_outputs = list(result.outputs)
         self._pending_result = result
         self.save_btn.configure(state="normal" if result.items_count else "disabled")
-        has_match = self._matcher is not None and bool(self._matcher.entries)
-        self.review_btn.configure(state="normal" if has_match else "disabled")
+        self._update_preview_columns()
 
         self._show_preview(result.items)
         self._log("")
@@ -884,8 +852,10 @@ class KonvektorApp(_Base):
                 text += self._match_hint()
                 if result.match_summary.get("review"):
                     text += (
-                        "\nПроверьте подобранные позиции кнопкой «Сверить с ведомостью…»:"
-                        " номенклатуру можно выбрать вручную или не выбирать вовсе."
+                        "\nСпорные позиции видны в таблице: там две колонки наименования"
+                        " («Из документа» и «Из ведомости») и процент совпадения."
+                        " Двойной щелчок по «Из ведомости» — выбрать другое название"
+                        " или вписать своё; пустое значение — оставить название документа."
                     )
             if planned:
                 text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
@@ -928,33 +898,274 @@ class KonvektorApp(_Base):
             button.configure(state=state)
         if busy:
             self.save_btn.configure(state="disabled")
-            self.review_btn.configure(state="disabled")
 
     # --------------------------------------------------------------- утилиты
     def _show_preview(self, items: List[Item], limit: int = PREVIEW_LIMIT) -> None:
-        """Показать полученную таблицу так, как она попадёт в Excel."""
+        """Показать таблицу так, как она попадёт в Excel.
+
+        В окне две колонки наименования — «Из документа» и «Из ведомости» — и
+        процент совпадения. В сохранённом файле по-прежнему одна колонка
+        «Наименование товара» с итоговым (ведомостным) названием.
+        """
         self._clear_preview()
         for item in items[:limit]:
-            values = [
-                item.barcode or "",
-                item.article or "",
-                item.name,
-                item.unit or "",
-                item.qty,
-                item.price,
-                item.total_sum,
-                item.vat_rate,
-                item.vat_sum,
-                item.sum_with_vat,
-            ]
-            tag = "odd" if len(self.preview.get_children()) % 2 else "even"
-            cells = [
-                self._fmt(value, title)
-                for value, title in zip(values, PREVIEW_COLUMNS)
-            ]
-            self.preview.insert("", "end", values=cells, tags=(tag,))
+            stored = {
+                "item": item,
+                "key": (item.source, item.sheet, item.row),
+            }
+            row_id = self.preview.insert(
+                "", "end", values=self._preview_values(item, stored), tags=("even",)
+            )
+            self._preview_rows[row_id] = stored
+            self._retag_row(row_id, stored)
+
+        # две «лишние» колонки нужны только при загруженной ведомости
+        self._update_preview_columns()
         if not items:
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
+
+    def _update_preview_columns(self) -> None:
+        """Показать/скрыть колонки «Из ведомости» и «% совпадения»."""
+        with_vedomost = self._vedomost is not None
+        columns = PREVIEW_COLUMNS if with_vedomost else PREVIEW_WITHOUT_VED
+        try:
+            self.preview.configure(displaycolumns=list(columns))
+        except Exception:  # noqa: BLE001 - оформление не критично
+            pass
+        # подсказка про правку нужна только когда есть что править
+        try:
+            self.edit_hint.configure(
+                text="двойной щелчок по «" + COLUMN_FROM_VED + "» — изменить название"
+                if with_vedomost
+                else ""
+            )
+        except Exception:  # noqa: BLE001 - не критично
+            pass
+
+    def _entry_for(self, key):
+        """Результат сверки для позиции (или None, если сверки не было)."""
+        if self._matcher is None:
+            return None
+        return self._matcher.by_key.get(key)
+
+    def _preview_values(self, item: Item, stored: dict) -> List[str]:
+        """Значения строки таблицы (12 колонок окна)."""
+        entry = self._entry_for(stored["key"])
+        override = self._overrides.get(stored["key"], _NO_OVERRIDE)
+        from_doc = entry.doc_name if entry is not None else item.name
+        if override is not _NO_OVERRIDE:
+            if override is None:
+                from_ved = ""
+                score = "не выбирать"
+            elif isinstance(override, str):
+                from_ved = override
+                score = "вручную"
+            else:
+                from_ved = override.nomenclature
+                score = "вручную"
+        elif entry is not None and entry.matched:
+            from_ved = entry.name
+            score = entry.score_title
+        else:
+            from_ved = ""
+            score = entry.score_title if entry is not None and entry.skipped else ""
+        values = [
+            item.barcode or "",
+            item.article or "",
+            from_doc,
+            from_ved,
+            score,
+            item.unit or "",
+            item.qty,
+            item.price,
+            item.total_sum,
+            item.vat_rate,
+            item.vat_sum,
+            item.sum_with_vat,
+        ]
+        return [self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
+
+    def _retag_row(self, row_id: str, stored: dict) -> None:
+        """Чередование строк + подсветка ручных правок."""
+        try:
+            index = list(self._preview_rows).index(row_id)
+        except ValueError:
+            index = 0
+        if stored["key"] in self._overrides:
+            tags = ("manual",)
+        else:
+            tags = ("odd",) if index % 2 else ("even",)
+        try:
+            self.preview.item(row_id, tags=tags)
+        except Exception:  # noqa: BLE001 - не критично
+            pass
+
+    # ------------------------------------------------- правка названия в таблице
+    def _on_preview_double_click(self, event) -> None:
+        """Двойной щелчок по ячейке «Из ведомости» открывает поле правки."""
+        if self._vedomost is None or self._matcher is None:
+            return
+        try:
+            row_id = self.preview.identify_row(event.y)
+            column = self.preview.identify_column(event.x)
+        except Exception:  # noqa: BLE001 - старая версия Tk
+            return
+        if not row_id or not column:
+            return
+        try:
+            index = int(str(column).lstrip("#")) - 1
+        except ValueError:
+            return
+        if index < 0 or index >= len(PREVIEW_COLUMNS):
+            return
+        if PREVIEW_COLUMNS[index] != COLUMN_FROM_VED:
+            return
+        self.edit_cell(row_id)
+
+    def edit_cell(self, row_id: str) -> None:
+        """Открыть редактор названия поверх ячейки «Из ведомости»."""
+        stored = self._preview_rows.get(row_id)
+        if stored is None:
+            return
+        entry = self._entry_for(stored["key"])
+        if entry is None:
+            # сверки для этой позиции нет — править нечего
+            return
+        try:
+            bbox = self.preview.bbox(row_id, f"#{PREVIEW_COLUMNS.index(COLUMN_FROM_VED) + 1}")
+        except Exception:  # noqa: BLE001 - не критично
+            bbox = None
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        suggestions = [row.nomenclature for _score, row in self._suggestions(entry)]
+        self._edit_var = tk.StringVar(value=self._current_from_ved(stored))
+        self._editor = ttk.Combobox(
+            self.preview, textvariable=self._edit_var, values=suggestions
+        )
+        try:
+            self._editor.place(x=x, y=y, width=max(width, 280), height=height)
+            self._editor.focus_set()
+            self._editor.bind("<Return>", lambda _e: self.commit_edit())
+            self._editor.bind("<FocusOut>", lambda _e: self.commit_edit())
+            self._editor.bind("<Escape>", lambda _e: self.cancel_edit())
+        except Exception:  # noqa: BLE001 - без редактора таблица остаётся
+            self._editor = None
+            return
+        self._editing = row_id
+
+    def _suggestions(self, entry):
+        """Похожие номенклатуры ведомости — подсказкой в выпадающем списке."""
+        if self._vedomost is None:
+            return []
+        supplier = ""
+        if self._matcher is not None:
+            supplier = str(self._matcher.summary.get("supplier_key") or "")
+        return self._vedomost.candidates(entry.doc_name, supplier, limit=10)
+
+    def _current_from_ved(self, stored: dict) -> str:
+        entry = self._entry_for(stored["key"])
+        override = self._overrides.get(stored["key"], _NO_OVERRIDE)
+        if override is not _NO_OVERRIDE:
+            if override is None:
+                return ""
+            if isinstance(override, str):
+                return override
+            return override.nomenclature
+        if entry is not None and entry.matched:
+            return entry.name
+        return ""
+
+    def _destroy_editor(self) -> None:
+        editor = getattr(self, "_editor", None)
+        self._editor = None
+        self._editing = None
+        if editor is not None:
+            try:
+                editor.destroy()
+            except Exception:  # noqa: BLE001 - уже уничтожен
+                pass
+        try:
+            self.preview.focus_set()
+        except Exception:  # noqa: BLE001 - не критично
+            pass
+
+    def cancel_edit(self) -> None:
+        self._destroy_editor()
+
+    def commit_edit(self) -> None:
+        """Записать выбранное/вписанное название и перерисовать строку."""
+        row_id = self._editing
+        if row_id is None:
+            return
+        text = ""
+        try:
+            text = self._edit_var.get() if self._edit_var is not None else ""
+        except Exception:  # noqa: BLE001 - не критично
+            text = ""
+        self._destroy_editor()
+        stored = self._preview_rows.get(row_id)
+        if stored is None:
+            return
+        entry = self._entry_for(stored["key"])
+        if entry is None:
+            return
+        text = " ".join(str(text or "").split())
+        if not text:
+            self._overrides[stored["key"]] = None  # пусто = «не выбирать»
+        else:
+            row = self._find_ved_row(entry, text)
+            # строка ведомости — переименовываем по ней; своего названия нет —
+            # оставляем вписанный текст как есть
+            self._overrides[stored["key"]] = row if row is not None else text
+        self._apply_edit_locally(stored, entry)
+        self._refresh_row(row_id, stored)
+        self.hint_var.set(
+            "Название изменено вручную — не забудьте «Сохранить»."
+        )
+
+    def _find_ved_row(self, entry, text: str):
+        """Найти номенклатуру ведомости по вписанному названию (если есть)."""
+        if self._vedomost is None:
+            return None
+        exact = self._vedomost.by_name(text)
+        if exact is not None:
+            return exact
+        supplier = ""
+        if self._matcher is not None:
+            supplier = str(self._matcher.summary.get("supplier_key") or "")
+        found = self._vedomost.candidates(text, supplier, limit=1)
+        if found and found[0][0] >= AUTO_SCORE:
+            return found[0][1]
+        return None
+
+    def _apply_edit_locally(self, stored: dict, entry) -> None:
+        """Сразу показать правку в таблице (файл пишется при «Сохранить»)."""
+        item = stored["item"]
+        override = self._overrides.get(stored["key"], _NO_OVERRIDE)
+        if override is _NO_OVERRIDE or override is None:
+            item.name = entry.doc_name
+            item.article = entry.doc_article or ""
+            item.barcode = entry.doc_barcode or ""
+            return
+        if isinstance(override, str):
+            item.name = override
+            item.article = entry.doc_article or ""
+            item.barcode = entry.doc_barcode or ""
+            return
+        item.name = override.nomenclature
+        item.article = entry.doc_article or override.article or ""
+        item.barcode = entry.doc_barcode or override.barcode or ""
+        if not entry.doc_article and override.unit and not item.unit:
+            item.unit = override.unit
+
+    def _refresh_row(self, row_id: str, stored: dict) -> None:
+        values = self._preview_values(stored["item"], stored)
+        try:
+            self.preview.item(row_id, values=values)
+        except Exception:  # noqa: BLE001 - не критично
+            pass
+        self._retag_row(row_id, stored)
 
     @staticmethod
     def _fmt(value, column: str = "") -> str:
@@ -981,6 +1192,8 @@ class KonvektorApp(_Base):
         return str(value)
 
     def _clear_preview(self) -> None:
+        self._destroy_editor()
+        self._preview_rows.clear()
         for child in self.preview.get_children():
             self.preview.delete(child)
 

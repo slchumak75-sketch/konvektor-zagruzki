@@ -14,6 +14,8 @@ from typing import Dict, List
 
 #: Тексты всех надписей, созданных в окне (для проверки «нет простыней текста»).
 TEXTS: List[str] = []
+#: Все созданные виджеты ttk (аргументы конструктора) — для проверки стилей.
+RECORDS: List[Dict[str, object]] = []
 
 
 class Widget:
@@ -71,6 +73,18 @@ class Widget:
 
     def winfo_exists(self):
         return True
+
+    def focus_set(self):
+        self.focused = True
+
+    def focus(self):
+        return None
+
+    def place_forget(self):
+        self.placed = False
+
+    def after(self, ms, func=None, *args):
+        return None
 
     def winfo_screenwidth(self):
         return 1920
@@ -180,6 +194,7 @@ class Listbox(Widget):
         super().__init__(*a, **k)
         self.items: List[str] = []
         self._selection: tuple = ()
+        self.row_tags: Dict[str, tuple] = {}
 
     def insert(self, index, element):
         self.items.append(str(element))
@@ -287,6 +302,7 @@ class Treeview(Widget):
         self.tags: Dict[str, dict] = {}
         self._next_id = 0
         self._selection: tuple = ()
+        self.row_tags: Dict[str, tuple] = {}
 
     def tag_configure(self, name, **k):
         self.tags[name] = dict(k)
@@ -324,6 +340,60 @@ class Treeview(Widget):
     def xview(self, *a):
         return None
 
+    def identify_region(self, x=0, y=0):
+        return getattr(self, "fake_region", "cell")
+
+    def identify_row(self, y=0):
+        if getattr(self, "fake_row", None):
+            return self.fake_row
+        return self.rows[0][0] if self.rows else ""
+
+    def identify_column(self, x=0):
+        return getattr(self, "fake_column", "#1")
+
+    def bbox(self, item=None, column=None):
+        if item is None or not any(row[0] == item for row in self.rows):
+            return ""
+        return (0, 0, 200, 23)
+
+    def focus_set(self):
+        self.focused = True
+
+    def set(self, item=None, column=None, value=None):
+        """Как у настоящего Treeview: прочитать/записать значение ячейки."""
+        if column is None:
+            return ""
+        if item not in self.columns_list:
+            # вызов вида set(row_id, column)
+            row_id, column = item, column
+            if value is not None:
+                return self._set_cell(row_id, column, value)
+            return self._get_cell(row_id, column)
+        return self._get_cell(None, item)
+
+    def _index_of(self, column):
+        return self.columns_list.index(column) if column in self.columns_list else -1
+
+    def _get_cell(self, row_id, column):
+        index = self._index_of(column)
+        for row in self.rows:
+            if row_id is None or row[0] == row_id:
+                values = list(row[1])
+                return values[index] if 0 <= index < len(values) else ""
+        return ""
+
+    def _set_cell(self, row_id, column, value):
+        index = self._index_of(column)
+        for position, row in enumerate(self.rows):
+            if row[0] == row_id:
+                values = list(row[1])
+                while len(values) <= index:
+                    values.append("")
+                values[index] = value
+                self.rows[position] = (row[0], tuple(values))
+                break
+        return value
+
     def selection(self, *a):
         return tuple(self._selection)
 
@@ -335,9 +405,19 @@ class Treeview(Widget):
         return any(row[0] == item for row in self.rows)
 
     def item(self, item=None, *a, **k):
+        if "values" in k:
+            index = None
+            for position, row in enumerate(self.rows):
+                if row[0] == item:
+                    index = position
+                    break
+            if index is not None:
+                self.rows[index] = (item, tuple(k["values"]))
+        if "tags" in k:
+            self.row_tags[item] = tuple(k["tags"])
         for row in self.rows:
             if row[0] == item:
-                return {"values": row[1]}
+                return {"values": row[1], "tags": self.row_tags.get(item, ())}
         return {}
 
 
@@ -440,8 +520,10 @@ def install() -> types.ModuleType:
             super().__init__(*a, **k)
             if "text" in k:
                 TEXTS.append(str(k["text"]))
+            RECORDS.append(dict(k))
 
     TEXTS.clear()
+    RECORDS.clear()
     for name in (
         "Frame",
         "Label",

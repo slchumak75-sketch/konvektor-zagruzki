@@ -61,6 +61,9 @@ MATCH_ORDER = {
     MATCH_NAME: (MATCH_NAME, MATCH_ARTICLE, MATCH_BARCODE),
 }
 
+#: Как в отчёте называется подбор, сделанный пользователем вручную.
+HOW_MANUAL = "вручную"
+
 #: С какого сходства названий считаем подбор удавшимся.
 AUTO_SCORE = 0.62
 #: С какого сходства подбор настолько уверенный, что проверять не нужно.
@@ -119,6 +122,10 @@ _ROLE_ALIASES = OrderedDict(
 _TOTAL_WORDS = {"итого", "всего", "итог", "итого по", "итого:"}
 
 _MISSING = object()
+
+#: Решение пользователя по позиции: строка ведомости, свободный текст или
+#: None («не выбирать»).
+Override = Optional[object]
 
 
 # --------------------------------------------------------------------- тексты
@@ -725,8 +732,8 @@ class MatchEntry:
             return "—"
         if self.how in (MATCH_BARCODE, MATCH_ARTICLE) and self.score >= 1.0:
             return "точно"
-        if self.how == "вручную":
-            return "вручную"
+        if self.how == HOW_MANUAL:
+            return HOW_MANUAL
         return f"{self.score:.0%}"
 
 
@@ -742,7 +749,7 @@ class Matcher:
         self,
         vedomost: Vedomost,
         strategy: str = MATCH_NAME,
-        overrides: Optional[Dict[Tuple[str, str, int], Optional[VedRow]]] = None,
+        overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
         min_score: float = AUTO_SCORE,
     ) -> None:
         self.vedomost = vedomost
@@ -778,7 +785,7 @@ class Matcher:
         """Короткий отчёт для подсказки в окне и для --json."""
         matched = [e for e in self.entries if e.matched]
         counters = {kind: 0 for kind in MATCH_TITLES}
-        counters["вручную"] = 0
+        counters[HOW_MANUAL] = 0
         for entry in matched:
             if entry.how in counters:
                 counters[entry.how] += 1
@@ -792,7 +799,7 @@ class Matcher:
             "barcode": counters[MATCH_BARCODE],
             "article": counters[MATCH_ARTICLE],
             "name": counters[MATCH_NAME],
-            "manual": counters["вручную"],
+            "manual": counters[HOW_MANUAL],
             "skipped": sum(1 for e in self.entries if e.skipped),
             "review": sum(1 for e in self.entries if e.review),
             "unmatched": sum(1 for e in self.entries if not e.matched and not e.skipped),
@@ -843,10 +850,21 @@ class Matcher:
 
         if override is not _MISSING:
             if override is None:
+                # «не выбирать»: остаётся наименование документа
                 entry.skipped = True
                 entry.name = entry.doc_name
+            elif isinstance(override, str):
+                # пользователь вписал название прямо в таблице
+                entry.matched = True
+                entry.how = HOW_MANUAL
+                entry.score = 1.0
+                entry.name = override
+                try:
+                    item.name = override
+                except Exception:  # noqa: BLE001 - позиция может быть неизменяемой
+                    pass
             else:
-                self._use(entry, override, "вручную", 1.0, item)
+                self._use(entry, override, HOW_MANUAL, 1.0, item)
         else:
             found = self._auto(item, key)
             if found is not None:
@@ -939,7 +957,7 @@ def apply_vedomost(
     vedomost: Vedomost,
     strategy: str = MATCH_NAME,
     supplier: str = "",
-    overrides: Optional[Dict[Tuple[str, str, int], Optional[VedRow]]] = None,
+    overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
 ) -> Matcher:
     """Подобрать номенклатуру для готового списка позиций (для консоли и тестов)."""
     matcher = Matcher(vedomost, strategy, overrides)

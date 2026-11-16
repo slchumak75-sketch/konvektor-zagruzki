@@ -65,11 +65,25 @@ def test_window_builds_with_single_file(gui, known_paths):
     assert len(app.files) == 1
     assert app.file_var.get().startswith("Кореличи")
     assert "Конвектор" in app.title()
-    # предпросмотр — ровно 10 колонок шаблона, без лишних
-    assert len(app.preview.columns_list) == 10
-    assert app.preview.headings["Наименование товара"] == "Наименование товара"
+    # в окне две колонки наименования и процент совпадения, «файл»/«строка» нет
+    assert list(app.preview.columns_list) == [
+        "Штрихкод", "Артикул", "Из документа", "Из ведомости", "% совпадения",
+        "ед. изм.", "количество", "цена", "сумма", "ставка НДС", "сумма НДС",
+        "сумма с НДС",
+    ]
+    assert app.preview.headings["Из документа"] == "Из документа"
+    assert app.preview.headings["Из ведомости"] == "Из ведомости"
     assert "файл" not in app.preview.headings
     assert "строка" not in app.preview.headings
+    # числовые колонки и «ед. изм.» в полтора раза уже, чем наименования
+    assert app.preview.widths["количество"] < app.preview.widths["Из документа"] / 3
+    assert app.preview.widths["сумма с НДС"] <= 80
+    assert app.preview.widths["ед. изм."] == 50
+    # без ведомости лишние колонки скрыты — таблица как раньше
+    assert app.preview.options["displaycolumns"] == [
+        "Штрихкод", "Артикул", "Из документа", "ед. изм.", "количество", "цена",
+        "сумма", "ставка НДС", "сумма НДС", "сумма с НДС",
+    ]
     # разлиновка: чередование строк настроено
     assert "odd" in app.preview.tags and "even" in app.preview.tags
 
@@ -182,8 +196,8 @@ def test_quantity_and_vat_have_no_decimal_comma(gui):
     app.on_convert()
     _run(app)
     rows = [row[1] for row in app.preview.rows]
-    quantities = [r[4] for r in rows if r[4]]
-    rates = {r[7] for r in rows if r[7]}
+    quantities = [r[6] for r in rows if r[6]]
+    rates = {r[9] for r in rows if r[9]}
     assert quantities and rates
     assert not any(q.endswith(",00") for q in quantities), quantities
     assert all("," not in rate for rate in rates), rates
@@ -255,9 +269,10 @@ def test_preview_shows_converted_table(gui):
     rows = app.preview.rows
     assert len(rows) == 11  # «Кореличи» — 11 позиций
     first = rows[0][1]
-    assert len(first) == 10  # только колонки шаблона
-    assert first[2]  # наименование
-    assert "," in first[5]  # числа показываем как в Excel — с запятой
+    assert len(first) == 12  # 10 колонок шаблона + «из ведомости» + «% совпадения»
+    assert first[2]  # наименование из документа
+    assert first[3] == ""  # ведомость не загружена — подбирать не из чего
+    assert "," in first[7]  # числа показываем как в Excel — с запятой
 
 
 def test_list_is_cleared_after_conversion(gui):
@@ -495,7 +510,8 @@ def test_load_bad_vedomost_shows_reason(gui, tmp_path):
     assert any(call[0] == "showwarning" for call in dialogs.calls)
 
 
-def test_convert_with_vedomost_renames_and_offers_review(gui, tmp_path):
+def test_convert_with_vedomost_shows_two_name_columns(gui, tmp_path):
+    """С ведомостью в таблице видно и название документа, и подобранное."""
     app, _, _ = gui
     app.load_vedomost(_write_vedomost(tmp_path))
     app.on_convert(MATCH_NAME)
@@ -503,12 +519,17 @@ def test_convert_with_vedomost_renames_and_offers_review(gui, tmp_path):
 
     assert "сверено с ведомостью" in app.hint_var.get()
     assert "будет сохранено" in app.hint_var.get()
-    assert app.review_btn.cget("state") == "normal"
-    names = [row[1][2] for row in app.preview.rows]
-    assert "Газ сжижен.в однораз.баллоне WERKER 520см3" in names
-    assert "Герметик акрил. бел. 280мл WUNDER" in names
+    # колонки «из ведомости» и «% совпадения» появились
+    assert "Из ведомости" in app.preview.options["displaycolumns"]
+    assert "% совпадения" in app.preview.options["displaycolumns"]
+    from_doc = [row[1][2] for row in app.preview.rows]
+    from_ved = [row[1][3] for row in app.preview.rows]
+    assert any(name.startswith("Газ сжиженный WERKER") for name in from_doc)
+    assert "Газ сжижен.в однораз.баллоне WERKER 520см3" in from_ved
+    assert "Герметик акрил. бел. 280мл WUNDER" in from_ved
     # позиции, которых нет в ведомости, остаются с наименованием документа
-    assert any(name and "Гидроизол ХКП S10м2 сер. к-сх-б-к/пп-3,5" in name for name in names)
+    assert any(name and "Гидроизол ХКП S10м2 сер. к-сх-б-к/пп-3,5" in name for name in from_doc)
+    assert any(name and "Гидроизол" in name for name in from_ved) is False
 
 
 def test_save_uses_vedomost_names(gui, tmp_path):
@@ -541,50 +562,161 @@ def test_convert_strategy_is_passed_to_matcher(gui, tmp_path):
     assert "по артикулу" in app.hint_var.get() or "сверено" in app.hint_var.get()
 
 
-def test_review_dialog_manual_choice_and_refusal(gui, tmp_path):
-    """Ручной выбор номенклатуры из ведомости и «не выбирать»."""
-    app, _, _ = gui
+
+
+# ------------------------------------------------- правка названия в таблице
+class _Event:
+    """Простое событие мыши для двойного щелчка по таблице."""
+
+    def __init__(self, x=0, y=0):
+        self.x = x
+        self.y = y
+
+
+def _open_vedomost_and_convert(app, tmp_path):
+    """Загрузить ведомость, сконвертировать образец «Кореличи»."""
     app.load_vedomost(_write_vedomost(tmp_path))
     app.on_convert(MATCH_NAME)
     _run(app)
 
-    from konvektor.review import ReviewDialog
 
-    dialog = ReviewDialog(app, app._matcher, on_done=app._overrides_done)
-    gas_row = None
-    gas_entry = None
-    for row, entry in dialog._entry_by_row.items():
-        if entry.doc_name.startswith("Гидроизол"):
-            gas_row, gas_entry = row, entry
-    assert gas_entry is not None
+def _row_with_doc(app, startswith: str):
+    for row_id, stored in app._preview_rows.items():
+        entry = app._entry_for(stored["key"])
+        if entry is not None and entry.doc_name.startswith(startswith):
+            return row_id, stored
+    raise AssertionError("позиция не найдена: " + startswith)
 
-    # --- «не выбирать»: у позиции остаётся наименование документа
-    dialog.item_tree.selection_set(gas_row)
-    dialog.on_skip()
-    assert dialog.overrides[gas_entry.key] is None
-    assert dialog.changed
 
-    # --- ручной выбор: берём первую позицию ведомости из списка кандидатов
-    row_id = next(iter(dialog._entry_by_row))
-    entry = dialog._entry_by_row[row_id]
-    dialog.item_tree.selection_set(row_id)
-    dialog.on_search()
-    candidate_id = next(iter(dialog._candidate_by_row))
-    candidate = dialog._candidate_by_row[candidate_id]
-    dialog.cand_tree.selection_set(candidate_id)
-    dialog.on_apply()
-    assert dialog.overrides[entry.key] is candidate
+def _double_click_from_ved(app, row_id):
+    """Сымитировать двойной щелчок по ячейке «Из ведомости» этой строки."""
+    column = "#" + str(app.preview.columns_list.index("Из ведомости") + 1)
+    app.preview.fake_row = row_id
+    app.preview.fake_column = column
+    app.preview.fake_region = "cell"
+    app._on_preview_double_click(_Event(10, 10))
 
-    dialog.on_close()
-    assert dialog.win.destroyed
-    # окно передало решения в главное окно и оно пересобрало таблицу
+
+def test_double_click_opens_editor_only_on_vedomost_column(gui, tmp_path):
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _stored = _row_with_doc(app, "Газ")
+
+    # щелчок по колонке «Из документа» редактор не открывает
+    app.preview.fake_row = row_id
+    app.preview.fake_column = "#" + str(app.preview.columns_list.index("Из документа") + 1)
+    app._on_preview_double_click(_Event(10, 10))
+    assert app._editor is None and app._editing is None
+
+    _double_click_from_ved(app, row_id)
+    assert app._editing == row_id
+    assert app._editor is not None
+    # в поле — текущее название из ведомости, в списке — похожие позиции
+    assert app._edit_var.get() == "Газ сжижен.в однораз.баллоне WERKER 520см3"
+    assert isinstance(app._editor.values_list, list)
+
+
+def test_typed_name_from_vedomost_renames_and_fills_article(gui, tmp_path):
+    """Вписали точное название из ведомости — позиция берётся из неё."""
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, stored = _row_with_doc(app, "Гидроизол")
+
+    _double_click_from_ved(app, row_id)
+    app._edit_var.set("Герметик акрил. бел. 280мл WUNDER")
+    app.commit_edit()
+
+    override = app._overrides[stored["key"]]
+    assert getattr(override, "nomenclature", "") == "Герметик акрил. бел. 280мл WUNDER"
+    values = dict(zip(app.preview.columns_list, app.preview.rows[0][1]))
+    target = next(row[1] for row in app.preview.rows if row[0] == row_id)
+    values = dict(zip(app.preview.columns_list, target))
+    assert values["Из ведомости"] == "Герметик акрил. бел. 280мл WUNDER"
+    assert values["% совпадения"] == "вручную"
+    assert app.preview.row_tags[row_id] == ("manual",)
+    assert stored["item"].name == "Герметик акрил. бел. 280мл WUNDER"
+
+
+def test_own_text_is_kept_as_is(gui, tmp_path):
+    """Своё название, которого нет в ведомости, остаётся свободным текстом."""
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, stored = _row_with_doc(app, "Гидроизол")
+
+    _double_click_from_ved(app, row_id)
+    app._edit_var.set("Гидроизол ХКП S10м2 серый 3,5 мм (своё)")
+    app.commit_edit()
+
+    assert app._overrides[stored["key"]] == "Гидроизол ХКП S10м2 серый 3,5 мм (своё)"
+    assert stored["item"].name == "Гидроизол ХКП S10м2 серый 3,5 мм (своё)"
+
+
+def test_empty_cell_means_do_not_choose(gui, tmp_path):
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, stored = _row_with_doc(app, "Газ")
+
+    _double_click_from_ved(app, row_id)
+    app._edit_var.set("")
+    app.commit_edit()
+
+    assert app._overrides[stored["key"]] is None
+    target = next(row[1] for row in app.preview.rows if row[0] == row_id)
+    values = dict(zip(app.preview.columns_list, target))
+    assert values["Из ведомости"] == ""
+    assert values["% совпадения"] == "не выбирать"
+    # наименование документа не тронуто
+    assert stored["item"].name.startswith("Газ сжиженный WERKER")
+
+
+def test_edited_name_goes_to_the_saved_file(gui, tmp_path):
+    """Правка в таблице попадает в сохранённый файл."""
+    import openpyxl
+
+    app, _, _ = gui
+    out_dir = tmp_path / "Итог"
+    app.out_var.set(str(out_dir))
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _stored = _row_with_doc(app, "Гидроизол")
+
+    _double_click_from_ved(app, row_id)
+    app._edit_var.set("Гидроизол ХКП 3,5 мм (проверено)")
+    app.commit_edit()
+
+    app.on_save()
     _run(app)
-    assert gas_entry.key in app._overrides
-    names = [row[1][2] for row in app.preview.rows]
-    assert "Гидроизол ХКП S10м2 сер. к-сх-б-к/пп-3,5" in names
+
+    written = app._last_outputs[0]
+    names = [
+        row[2]
+        for row in openpyxl.load_workbook(written)["Данные"].iter_rows(min_row=2, values_only=True)
+    ]
+    assert "Гидроизол ХКП 3,5 мм (проверено)" in names
 
 
-def test_review_requires_vedomost(gui):
-    app, _, dialogs = gui
-    app.on_review()
-    assert any(call[0] == "showinfo" for call in dialogs.calls)
+def test_edit_requires_vedomost(gui):
+    """Без ведомости править нечего — редактор не открывается."""
+    app, _, _ = gui
+    app.on_convert()
+    _run(app)
+    row_id = next(iter(app._preview_rows))
+    _double_click_from_ved(app, row_id)
+    assert app._editor is None
+
+
+# ------------------------------------------------------ узкие плашки шагов
+def test_step_cards_use_compact_buttons(gui):
+    """Плашки ШАГ 1 и ШАГ 2 — минимальной высоты: мелкий шрифт и узкие кнопки."""
+    app, _, _ = gui
+    compact = [
+        record for record in fake_tk.RECORDS if record.get("style") == "Compact.TButton"
+    ]
+    texts = [str(record.get("text", "")) for record in fake_tk.RECORDS]
+    assert "Выбрать файл…" in texts
+    assert any("Загрузить ведомость" in text for text in texts)
+    assert "Обзор…" in texts
+    # все кнопки этих плашек — компактные
+    assert len(compact) >= 3
+    # мелкие подписи полей
+    small = [r for r in fake_tk.RECORDS if r.get("style") == "Small.TLabel"]
+    assert len(small) >= 3

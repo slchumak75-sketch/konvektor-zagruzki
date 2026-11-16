@@ -383,3 +383,18 @@ def test_convert_without_vedomost_keeps_names(tmp_path):
     result = convert([str(doc_path)], "", ConvertOptions(write=False), log=lambda m: None)
     assert result.items[0].name == "Газ сжиженный WERKER (220гр/520см3)"
     assert result.match_summary == {}
+
+
+def test_free_text_override_is_used_as_is():
+    """Название, вписанное пользователем в таблице, попадает в результат."""
+    ved = make_vedomost()
+    key = ("счет.xls", "Лист1", 3)
+    matcher = Matcher(ved, MATCH_NAME, overrides={key: "Своё название 1 кг"})
+    matcher.begin_file("счет.xls", 'ООО "ОМА"')
+    doc = item("Грунтовка акриловая Тайфун Мастер № 100 белая, 1кг", row=3)
+    entry = matcher.apply(doc)
+
+    assert entry.matched and entry.how == "вручную"
+    assert entry.how_title == "вручную"
+    assert doc.name == "Своё название 1 кг"
+    assert matcher.summary["manual"] == 1
