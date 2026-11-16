@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import re
 import tempfile
 import traceback
 from collections import OrderedDict
@@ -127,6 +128,7 @@ def safe_path_part(name: str, limit: int = 80) -> str:
     for ch in _ILLEGAL_IN_NAME:
         text = text.replace(ch, " ")
     text = " ".join(text.split())
+    text = re.sub(r"\s+,", ",", text)
     text = text.strip(" .")
     if len(text) > limit:
         text = text[:limit].rstrip(" .")
@@ -208,8 +210,10 @@ def output_path_for(
     """
     base = base_dir or documents_dir()
     if sklad:
-        name = safe_path_part(supplier or (meta.supplier if meta else "")) or "Поставщик не определён"
-        folder = os.path.join(base, safe_path_part(sklad), safe_path_part(name))
+        name = safe_path_part(supplier or (meta.supplier if meta else ""), limit=10000) or "Поставщик не определён"
+        if len(name) > 240:
+            raise ValueError("Имена выбранных поставщиков слишком длинные для одной папки. Выберите меньше поставщиков.")
+        folder = os.path.join(base, safe_path_part(sklad), name)
         day = date or _dt.date.today()
         return os.path.join(folder, safe_path_part(fmt_date(day), limit=40) + ".xlsx")
     return os.path.join(base, output_filename(meta, date=date))

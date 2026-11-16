@@ -214,6 +214,7 @@ class Listbox(Widget):
     def delete(self, first, last=None):
         if first == 0 and last == "end":
             self.items.clear()
+            self._selection = ()
         elif isinstance(first, int):
             if first < len(self.items):
                 del self.items[first]
@@ -229,8 +230,15 @@ class Listbox(Widget):
     def curselection(self):
         return self._selection
 
-    def selection_set(self, idx):
-        self._selection = (idx,)
+    def selection_set(self, idx, last=None):
+        if self.options.get("selectmode") == "multiple":
+            end = len(self.items) - 1 if last == "end" else (last if last is not None else idx)
+            self._selection = tuple(sorted(set(self._selection) | set(range(idx, end + 1))))
+        else:
+            self._selection = (idx,)
+
+    def selection_clear(self, first, last=None):
+        self._selection = ()
 
     def see(self, *a):
         return None
@@ -322,13 +330,15 @@ class Treeview(Widget):
     def heading(self, column, **k):
         self.headings[column] = k.get("text", "")
 
-    def column(self, column, **k):
+    def column(self, column, *args, **k):
         if "width" in k:
             self.widths[column] = k["width"]
+        if args and args[0] == "width":
+            return self.widths.get(column, 0)
 
     def insert(self, parent, index, values=None, **k):
         self._next_id += 1
-        row_id = f"I{self._next_id:03d}"
+        row_id = k.get("iid") or f"I{self._next_id:03d}"
         self.rows.append((row_id, tuple(values or ())))
         self.last_tags = tuple(k.get("tags") or ())
         return row_id
@@ -347,6 +357,12 @@ class Treeview(Widget):
     config = configure
 
     def yview(self, *a):
+        return None
+
+    def yview_moveto(self, *a):
+        return None
+
+    def xview_scroll(self, *a):
         return None
 
     def xview(self, *a):

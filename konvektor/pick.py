@@ -9,11 +9,11 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Optional
+from typing import List
 
 try:  # pragma: no cover - зависит от сборки Python
     import tkinter as tk
-    from tkinter import ttk
+    from tkinter import ttk, messagebox
 
     TK_AVAILABLE = True
 except Exception:  # noqa: BLE001 - без tkinter диалог не нужен
@@ -35,120 +35,92 @@ BORDER = "#D8E0EC"
 
 
 class SourceDialog:
-    """Маленькое окно: склад + поставщик перед конвертацией."""
+    """Выбор склада и нескольких поставщиков только из этого склада."""
 
-    def __init__(
-        self,
-        master,
-        suppliers: Iterable[str] = (),
-        sklad: str = "",
-        supplier: str = "",
-        on_done: Optional[Callable[[str, str], None]] = None,
-    ) -> None:
-        self.master = master
-        self.on_done = on_done
-        self.suppliers: List[str] = [s for s in suppliers if str(s).strip()]
+    def __init__(self, master, suppliers=(), sklad="", supplier=(), on_done=None, require_selection=False):
+        self.master, self.on_done = master, on_done
+        self.require_selection = require_selection
+        self._supplier_source = suppliers
+        self._initial = [supplier] if isinstance(supplier, str) and supplier else list(supplier or ())
+        self.suppliers = []
         self.win = tk.Toplevel(master)
-        try:
-            self.win.title("Склад и поставщик")
-            self.win.geometry("560x300")
-            self.win.configure(background=BG)
-            self.win.transient(master)
-        except Exception:  # noqa: BLE001 - оформление не критично
-            pass
-
+        self.win.title("Склад и поставщики")
+        self.win.geometry("600x480")
+        self.win.configure(background=BG)
+        self.win.transient(master)
         self.sklad_var = tk.StringVar(value=sklad or SKLADS[0])
-        self.supplier_var = tk.StringVar(value=supplier or DOC_SUPPLIER)
         self._build()
+        self._change_sklad(initial=True)
 
-    # ------------------------------------------------------------------ вёрстка
-    def _build(self) -> None:
+    def _build(self):
         pad = {"padx": 18}
-        tk.Label(
-            self.win,
-            text="Куда положить результат",
-            background=BG,
-            foreground=NAVY,
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", pady=(14, 2), **pad)
-
-        sklad_row = ttk.Frame(self.win, style="Pick.TFrame")
-        sklad_row.pack(fill="x", pady=(2, 8), **pad)
-        ttk.Label(sklad_row, text="Склад:", style="Pick.TLabel").pack(side="left")
+        ttk.Label(self.win, text="Склад:", style="Pick.TLabel").pack(anchor="w", pady=(14, 2), **pad)
+        row = ttk.Frame(self.win, style="Pick.TFrame")
+        row.pack(fill="x", **pad)
         self.sklad_buttons = {}
         for name in SKLADS:
-            button = ttk.Radiobutton(
-                sklad_row, text=name, value=name, variable=self.sklad_var
-            )
-            button.pack(side="left", padx=(12, 0))
+            button = ttk.Radiobutton(row, text=name, value=name, variable=self.sklad_var,
+                                     command=self._change_sklad)
+            button.pack(side="left", padx=(0, 16))
             self.sklad_buttons[name] = button
-
-        ttk.Label(self.win, text="Поставщик:", style="Pick.TLabel").pack(anchor="w", **pad)
-        self.supplier_box = ttk.Combobox(
-            self.win,
-            textvariable=self.supplier_var,
-            values=[DOC_SUPPLIER] + self.suppliers,
-            state="readonly",
-        )
-        self.supplier_box.pack(fill="x", pady=(2, 6), **pad)
-        self.hint_label = ttk.Label(
-            self.win,
-            text=self._hint(),
-            style="PickHint.TLabel",
-            wraplength=500,
-            justify="left",
-        )
-        self.hint_label.pack(anchor="w", **pad)
-
+        ttk.Label(self.win, text="Поставщики выбранного склада (можно выбрать несколько):",
+                  style="Pick.TLabel").pack(anchor="w", pady=(10, 2), **pad)
+        box = ttk.Frame(self.win, style="Pick.TFrame")
+        box.pack(fill="both", expand=True, **pad)
+        self.supplier_box = tk.Listbox(box, selectmode="multiple", exportselection=False,
+                                       height=10, font=("Segoe UI", 10))
+        scrollbar = ttk.Scrollbar(box, orient="vertical", command=self.supplier_box.yview)
+        self.supplier_box.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.supplier_box.pack(side="left", fill="both", expand=True)
         buttons = ttk.Frame(self.win, style="Pick.TFrame")
-        buttons.pack(fill="x", pady=(12, 12), **pad)
-        self.ok_btn = ttk.Button(
-            buttons, text="Продолжить", style="PickPrimary.TButton", command=self.on_ok
-        )
-        self.ok_btn.pack(side="right")
-        self.cancel_btn = ttk.Button(
-            buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel
-        )
-        self.cancel_btn.pack(side="right", padx=(0, 8))
+        buttons.pack(fill="x", pady=(8, 8), **pad)
+        ttk.Button(buttons, text="Выбрать всех", command=self.select_all).pack(side="left")
+        ttk.Button(buttons, text="Снять выбор", command=self.clear_selection).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Продолжить", style="PickPrimary.TButton", command=self.on_ok).pack(side="right")
+        ttk.Button(buttons, text="Отмена", command=self.on_cancel).pack(side="right", padx=8)
+        self.hint_label = ttk.Label(self.win, text="Выберите поставщиков из ведомости. Если ведомость не загружена — как в документе.",
+                                    style="PickHint.TLabel", wraplength=550)
+        self.hint_label.pack(anchor="w", pady=(0, 10), **pad)
 
-    def _hint(self) -> str:
-        if not self.suppliers:
-            return (
-                "Ведомость не загружена — поставщик берётся из документа. "
-                "Загрузите ведомость, чтобы выбрать поставщика из неё."
-            )
-        return (
-            f"В ведомости {len(self.suppliers)} поставщик(ов). Выберите своего — "
-            "номенклатура будет подбираться только среди его позиций, а файл "
-            "попадёт в папку «склад / поставщик»."
-        )
+    def _change_sklad(self, initial=False):
+        source = self._supplier_source
+        values = source(self.sklad_value) if callable(source) else source
+        self.suppliers = sorted(set(str(v).strip() for v in values if str(v).strip()), key=str.casefold)
+        self.supplier_box.delete(0, "end")
+        for i, name in enumerate(self.suppliers):
+            self.supplier_box.insert("end", name)
+            if initial and name in self._initial:
+                self.supplier_box.selection_set(i)
 
-    # ------------------------------------------------------------------ данные
-    @property
-    def supplier_value(self) -> str:
-        """Выбранный поставщик (пустая строка — как в документе)."""
-        value = str(self.supplier_var.get() or "").strip()
-        return "" if value == DOC_SUPPLIER else value
+    def select_all(self):
+        self.supplier_box.selection_set(0, "end")
+
+    def clear_selection(self):
+        self.supplier_box.selection_clear(0, "end")
 
     @property
-    def sklad_value(self) -> str:
+    def supplier_value(self):
+        return [self.suppliers[int(i)] for i in self.supplier_box.curselection()]
+
+    @property
+    def sklad_value(self):
         return str(self.sklad_var.get() or "").strip()
 
-    # ---------------------------------------------------------------- события
-    def on_ok(self) -> None:
-        sklad, supplier = self.sklad_value, self.supplier_value
+    def on_ok(self):
+        sklad, suppliers = self.sklad_value, self.supplier_value
+        if self.require_selection and not suppliers:
+            messagebox.showwarning("Склад и поставщики", "Выберите хотя бы одного поставщика этого склада. Если список пуст, проверьте колонку «Склад» ведомости.", parent=self.win)
+            return
         self.close()
         if self.on_done is not None:
-            self.on_done(sklad, supplier)
+            self.on_done(sklad, suppliers)
 
-    def on_cancel(self) -> None:
+    def on_cancel(self):
         self.close()
 
-    def close(self) -> None:
-        try:
-            self.win.destroy()
-        except Exception:  # noqa: BLE001 - окно могло уже закрыться
-            pass
+    def close(self):
+        self.win.destroy()
 
 
 #: Пункт выпадающего списка номенклатуры: вписать своё название.

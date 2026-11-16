@@ -18,6 +18,7 @@ Konvektor.exe — Windows передаст его в командной стро
 from __future__ import annotations
 
 import os
+import json
 import queue
 import subprocess
 import sys
@@ -185,6 +186,8 @@ class KonvektorApp(_Base):
         # склад и поставщик, выбранные в диалоге при загрузке файла
         self._sklad = ""
         self._supplier_choice = ""
+        self._supplier_choices = []
+        self._source_required = False
         # открытый выпадающий список номенклатуры ведомости
         self._chooser = None
         self._chooser_row: Optional[str] = None
@@ -334,6 +337,7 @@ class KonvektorApp(_Base):
             command=self.on_save, state="disabled",
         )
         self.save_btn.pack(side="left")
+        ttk.Button(tools_row, text="Конфигурация", command=self.on_configuration).pack(side="left", padx=(8, 0))
         # подсказка про правку названия прямо в таблице (одна строка, не мешает)
         self.edit_hint = ttk.Label(
             tools_row,
@@ -367,48 +371,39 @@ class KonvektorApp(_Base):
             background=BORDER,
         )
         grid_box.pack(fill="both", expand=True)
-        self.preview = ttk.Treeview(
-            grid_box,
-            columns=PREVIEW_COLUMNS,
-            show="headings",
-            height=12,
-            style="Grid.Treeview",
-            selectmode="browse",
-        )
-        # «разлиновка»: чередование строк, как в Excel
-        self.preview.tag_configure("odd", background=ROW_ODD)
-        self.preview.tag_configure("even", background=CARD)
-        # строки, где название выбрано/вписано вручную — светло-жёлтые
-        self.preview.tag_configure("manual", background="#FFF7E0")
-        # без ведомости двух «лишних» колонок нет — таблица как раньше, 10 колонок
-        self.preview.configure(displaycolumns=list(PREVIEW_WITHOUT_VED))
-        for title, width, min_width in zip(
-            PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS
-        ):
-            numeric = title in _NUMERIC_PREVIEW
-            self.preview.heading(title, text=title, anchor="center")
-            self.preview.column(
-                title,
-                width=width,
-                minwidth=min_width,
-                anchor="e" if numeric else "w",
-                stretch=(title == "Наименование товара"),
-            )
-
-        yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self._preview_yview)
-        xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self._preview_xview)
-        self.preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        yscroll.pack(side="right", fill="y")
-        xscroll.pack(side="bottom", fill="x")
-        self.preview.pack(side="left", fill="both", expand=True)
-        # «▾» справа от названия открывает список номенклатуры ведомости
+        # Две синхронные таблицы: первые шесть полей остаются закреплёнными.
+        self._grid_box = grid_box
+        self._left_box = ttk.Frame(grid_box, width=600)
+        self._left_box.pack(side="left", fill="y")
+        self._left_box.pack_propagate(False)
+        self.preview = ttk.Treeview(self._left_box, columns=PREVIEW_COLUMNS,
+                                    show="headings", height=12, style="Grid.Treeview", selectmode="browse")
+        self.preview_right = ttk.Treeview(grid_box, columns=PREVIEW_COLUMNS,
+                                          show="headings", height=12, style="Grid.Treeview", selectmode="browse")
+        self._syncing_scroll = False
+        self._yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self._preview_yview)
+        self._yscroll.pack(side="right", fill="y")
+        self.preview.pack(fill="both", expand=True)
+        self.preview_right.pack(side="left", fill="both", expand=True)
+        self.preview.configure(yscrollcommand=lambda first, last: self._table_scrolled(self.preview_right, first, last))
+        self.preview_right.configure(yscrollcommand=lambda first, last: self._table_scrolled(self.preview, first, last))
+        for tree in (self.preview, self.preview_right):
+            for tag, color in (("odd", ROW_ODD), ("even", CARD), ("manual", "#FFF7E0")):
+                tree.tag_configure(tag, background=color)
+            for title, width, min_width in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS):
+                tree.heading(title, text=title, anchor="center")
+                tree.column(title, width=width, minwidth=min_width,
+                            anchor="e" if title in _NUMERIC_PREVIEW else "w", stretch=True)
+            tree.bind("<MouseWheel>", self._on_preview_wheel)
+            tree.bind("<Button-4>", self._on_preview_wheel)
+            tree.bind("<Button-5>", self._on_preview_wheel)
         self.preview.bind("<Button-1>", self._on_preview_click)
         self.preview.bind("<Double-1>", self._on_preview_double_click)
-        # прокрутка и колесо закрывают открытый список/поле ввода: иначе они
-        # «висят» поверх уехавшей строки
-        self.preview.bind("<MouseWheel>", self._on_preview_wheel)
-        self.preview.bind("<Button-4>", self._on_preview_wheel)
-        self.preview.bind("<Button-5>", self._on_preview_wheel)
+        # Дополнительный доступ к обрезанным правым полям без видимого скроллбара.
+        self.preview_right.bind("<Shift-MouseWheel>", self._on_horizontal_wheel)
+        grid_box.bind("<Configure>", self._resize_table)
+        self._update_preview_columns()
+        self._load_field_widths()
 
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
@@ -416,6 +411,84 @@ class KonvektorApp(_Base):
         ).pack(anchor="w", padx=14, pady=(0, 10))
 
         self._clear_preview()
+
+    def _table_scrolled(self, other, first, last):
+        self._yscroll.set(first, last)
+        if self._syncing_scroll:
+            return
+        self._syncing_scroll = True
+        try:
+            current = other.yview()
+            if not current or abs(float(current[0]) - float(first)) > 0.00001:
+                other.yview_moveto(first)
+        finally:
+            self._syncing_scroll = False
+
+    def _on_horizontal_wheel(self, event):
+        self._close_popups()
+        delta = getattr(event, "delta", 0)
+        if delta:
+            self.preview_right.xview_scroll(-1 if delta > 0 else 1, "units")
+        return "break"
+
+    def _resize_table(self, event=None):
+        # Левая часть не занимает всё окно: правая всегда доступна.
+        width = getattr(event, "width", 0) or 0
+        if width > 100:
+            self._left_box.configure(width=max(300, int(width * 0.61)))
+
+    @staticmethod
+    def _field_settings_path():
+        root = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+        return os.path.join(root, "Konvektor", "view.json")
+
+    def _load_field_widths(self):
+        try:
+            with open(self._field_settings_path(), encoding="utf-8") as stream:
+                widths = json.load(stream).get("widths", {})
+            if not isinstance(widths, dict):
+                return
+            for column, value in widths.items():
+                if column in PREVIEW_COLUMNS and isinstance(value, int) and 20 <= value <= 2000:
+                    for tree in (self.preview, self.preview_right):
+                        tree.column(column, width=value)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    def save_field_widths(self):
+        try:
+            widths = {}
+            for index, column in enumerate(PREVIEW_COLUMNS):
+                tree = self.preview if index < 6 else self.preview_right
+                widths[column] = int(tree.column(column, "width"))
+            path = self._field_settings_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as stream:
+                json.dump({"widths": widths}, stream, ensure_ascii=False, indent=2)
+            messagebox.showinfo(APP_NAME, "Ширины полей сохранены.")
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror(APP_NAME, f"Не удалось сохранить настройки: {exc}")
+
+    def reset_field_widths(self):
+        try:
+            os.remove(self._field_settings_path())
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            messagebox.showerror(APP_NAME, f"Не удалось сбросить настройки: {exc}")
+            return
+        for tree in (self.preview, self.preview_right):
+            for column, width in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS):
+                tree.column(column, width=width)
+
+    def on_configuration(self):
+        win = tk.Toplevel(self)
+        win.title("Конфигурация таблицы")
+        win.transient(self)
+        ttk.Label(win, text="Измените ширину столбцов мышью, затем сохраните настройки.").pack(padx=16, pady=12)
+        ttk.Button(win, text="Закрепить поля", command=self.save_field_widths).pack(fill="x", padx=16, pady=4)
+        ttk.Button(win, text="Сбросить ширины", command=self.reset_field_widths).pack(fill="x", padx=16, pady=4)
+        ttk.Button(win, text="Закрыть", command=win.destroy).pack(pady=12)
 
     def _maximize(self) -> None:
         """Развернуть окно на весь экран сразу при запуске.
@@ -571,12 +644,12 @@ class KonvektorApp(_Base):
 
     # ------------------------------------------------------------- действия
     # ------------------------------------------------- склад и поставщик
-    def suppliers_of_vedomost(self) -> List[str]:
+    def suppliers_of_vedomost(self, sklad: str = "") -> List[str]:
         """Поставщики из загруженной ведомости — для списка в диалоге."""
         if self._vedomost is None:
             return []
         try:
-            found = list(self._vedomost.suppliers)
+            found = list(self._vedomost.suppliers_of_warehouse(sklad) if sklad else self._vedomost.suppliers)
         except Exception:  # noqa: BLE001 - не критично
             return []
         # ведомость отдаёт пары «поставщик, позиций» — в списке нужно имя
@@ -590,16 +663,18 @@ class KonvektorApp(_Base):
 
     def on_choose_source(self) -> None:
         """Кнопка «Изменить…»: спросить склад и поставщика."""
-        self.ask_source(force=True)
+        if not self._running:
+            self.ask_source(force=True)
 
     def ask_source(self, force: bool = False) -> bool:
         """Спросить склад и поставщика (диалог поверх окна)."""
         dialog = SourceDialog(
             self,
-            self.suppliers_of_vedomost(),
+            self.suppliers_of_vedomost,
             self._sklad,
-            self._supplier_choice,
+            self._supplier_choices,
             on_done=self._source_chosen,
+            require_selection=self._vedomost is not None,
         )
         self._source_dialog = dialog
         try:
@@ -614,16 +689,23 @@ class KonvektorApp(_Base):
             pass
         return True
 
-    def _source_chosen(self, sklad: str, supplier: str) -> None:
+    def _source_chosen(self, sklad: str, supplier) -> None:
+        choices = [supplier] if isinstance(supplier, str) and supplier else list(supplier or ())
+        choices = sorted(set(choices), key=str.casefold)
+        if sklad != self._sklad or choices != self._supplier_choices:
+            self._overrides = {}
+            self._pending_result = None
+            self._clear_preview()
+            self.save_btn.configure(state="disabled")
         self._sklad = sklad or ""
-        self._supplier_choice = supplier or ""
+        self._source_required = False
+        self._supplier_choices = choices
+        self._supplier_choice = ", ".join(choices)
         self._matcher = None
         self.source_var.set(self.source_text())
         if self._sklad:
-            self.hint_var.set(
-                "Результат будет сохранён в папке "
-                f"«{self._sklad}{os.sep}{self._supplier_choice or 'Поставщик не определён'}»."
-            )
+            self.hint_var.set("Результат будет сохранён в папке "
+                f"«{self._sklad}{os.sep}{self._supplier_choice or 'Поставщик не определён'}».")
         else:
             self.hint_var.set("Склад не выбран — файл сохранится сразу в папку «Путь».")
 
@@ -635,16 +717,21 @@ class KonvektorApp(_Base):
         return f"{self._sklad} / {supplier}"
 
     def on_add_files(self) -> None:
+        if self._running:
+            return
         path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
         if not path:
             return
         self._add_files([path])
-        # заказчик просил спрашивать склад и поставщика именно при загрузке файла
+        # Отмена диалога не должна незаметно применить выбор к новому счёту.
+        self._source_required = True
         self.ask_source()
 
     # ------------------------------------------------------------- ведомость
     def on_load_vedomost(self) -> None:
         """Выбрать файл ведомости остатков ТМЦ (читается в фоне)."""
+        if self._running:
+            return
         path = filedialog.askopenfilename(
             title="Выберите ведомость остатков ТМЦ",
             filetypes=[
@@ -683,6 +770,11 @@ class KonvektorApp(_Base):
         # ручные решения относились к прошлой ведомости — сбрасываем
         self._overrides = {}
         self._matcher = None
+        self._supplier_choices = []
+        self._supplier_choice = ""
+        self._pending_result = None
+        self._clear_preview()
+        self.save_btn.configure(state="disabled")
         self.ved_var.set(self._vedomost_text(vedomost))
         # выбрать поставщика теперь можно из этой ведомости — обновляем строку
         self.source_var.set(self.source_text())
@@ -698,6 +790,15 @@ class KonvektorApp(_Base):
     def _vedomost_failed(self, path: str, exc: Exception) -> None:
         self._set_busy(False)
         message = str(exc) or type(exc).__name__
+        self._vedomost = None
+        self._matcher = None
+        self._overrides = {}
+        self._supplier_choices = []
+        self._supplier_choice = ""
+        self._pending_result = None
+        self._clear_preview()
+        self.save_btn.configure(state="disabled")
+        self.source_var.set(self.source_text())
         self.ved_var.set("не загружена")
         self.hint_var.set("Ведомость не загружена: " + message)
         messagebox.showwarning(APP_NAME, "Не удалось загрузить ведомость\n\n" + message)
@@ -759,6 +860,12 @@ class KonvektorApp(_Base):
         if not self.files:
             messagebox.showwarning(APP_NAME, "Сначала выберите файл.")
             return
+        if self._source_required:
+            messagebox.showwarning(APP_NAME, "Выберите склад и поставщиков: нажмите «Изменить…».")
+            return
+        if self._vedomost is not None and self._sklad and not self._supplier_choices:
+            messagebox.showwarning(APP_NAME, "Выберите поставщиков выбранного склада: нажмите «Изменить…».")
+            return
         self._start_convert(self.files[0], strategy, write=False)
 
     def _start_convert(self, path: str, strategy: str = MATCH_NAME, write: bool = False) -> None:
@@ -769,11 +876,14 @@ class KonvektorApp(_Base):
         if self._vedomost is not None:
             # ручные решения пользователя (выбор/«не выбирать») переживают
             # повторную конвертацию — иначе они бы терялись при каждом нажатии
+            scoped = (self._vedomost.for_selection(self._sklad, self._supplier_choices)
+                      if self._sklad or self._supplier_choices else self._vedomost)
             matcher = Matcher(
-                self._vedomost,
+                scoped,
                 self._strategy,
                 self._overrides,
-                supplier=self._supplier_choice,
+                supplier=self._supplier_choices[0] if len(self._supplier_choices) == 1 else "",
+                all_suppliers=len(self._supplier_choices) > 1,
             )
         self._matcher = matcher
         options = ConvertOptions(
@@ -1033,6 +1143,7 @@ class KonvektorApp(_Base):
             row_id = self.preview.insert(
                 "", "end", values=self._preview_values(item, stored), tags=("even",)
             )
+            self.preview_right.insert("", "end", iid=row_id, values=self._preview_values(item, stored), tags=("even",))
             self._preview_rows[row_id] = stored
             self._retag_row(row_id, stored)
 
@@ -1046,7 +1157,8 @@ class KonvektorApp(_Base):
         with_vedomost = self._vedomost is not None
         columns = PREVIEW_COLUMNS if with_vedomost else PREVIEW_WITHOUT_VED
         try:
-            self.preview.configure(displaycolumns=list(columns))
+            self.preview.configure(displaycolumns=[c for c in columns if c in PREVIEW_COLUMNS[:6]])
+            self.preview_right.configure(displaycolumns=list(PREVIEW_COLUMNS[6:]))
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
         # подсказка про правку нужна только когда есть что править
@@ -1117,6 +1229,7 @@ class KonvektorApp(_Base):
             tags = ("odd",) if index % 2 else ("even",)
         try:
             self.preview.item(row_id, tags=tags)
+            self.preview_right.item(row_id, tags=tags)
         except Exception:  # noqa: BLE001 - не критично
             pass
 
@@ -1356,7 +1469,10 @@ class KonvektorApp(_Base):
         supplier = ""
         if self._matcher is not None:
             supplier = str(self._matcher.summary.get("supplier_key") or "")
-        return self._vedomost.candidates(entry.doc_name, supplier, limit=10)
+        ved = self._matcher.vedomost if self._matcher is not None else self._vedomost
+        if self._matcher is not None and self._matcher.supplier_text and not supplier:
+            return []
+        return ved.candidates(entry.doc_name, supplier, limit=10)
 
     def _current_from_ved(self, stored: dict) -> str:
         entry = self._entry_for(stored["key"])
@@ -1426,15 +1542,13 @@ class KonvektorApp(_Base):
         """Найти номенклатуру ведомости по вписанному названию (если есть)."""
         if self._vedomost is None:
             return None
-        exact = self._vedomost.by_name(text)
-        if exact is not None:
-            return exact
-        supplier = ""
-        if self._matcher is not None:
-            supplier = str(self._matcher.summary.get("supplier_key") or "")
-        found = self._vedomost.candidates(text, supplier, limit=1)
-        if found and found[0][0] >= AUTO_SCORE:
-            return found[0][1]
+        ved = self._matcher.vedomost if self._matcher is not None else self._vedomost
+        supplier = str(self._matcher.summary.get("supplier_key") or "") if self._matcher else ""
+        if self._matcher and self._matcher.supplier_text and not supplier:
+            return None
+        found = ved.find(text, "", "", MATCH_NAME, supplier)
+        if found and found[1] >= AUTO_SCORE:
+            return found[0]
         return None
 
     def _apply_edit_locally(self, stored: dict, entry) -> None:
@@ -1464,6 +1578,7 @@ class KonvektorApp(_Base):
         values = self._preview_values(stored["item"], stored)
         try:
             self.preview.item(row_id, values=values)
+            self.preview_right.item(row_id, values=values)
         except Exception:  # noqa: BLE001 - не критично
             pass
         self._retag_row(row_id, stored)
@@ -1495,8 +1610,9 @@ class KonvektorApp(_Base):
     def _clear_preview(self) -> None:
         self._close_popups()
         self._preview_rows.clear()
-        for child in self.preview.get_children():
-            self.preview.delete(child)
+        for tree in (self.preview, self.preview_right):
+            for child in tree.get_children():
+                tree.delete(child)
 
     def _add_files(self, paths: List[str]) -> None:
         """Один файл за раз: новый выбор заменяет предыдущий."""
@@ -1506,6 +1622,11 @@ class KonvektorApp(_Base):
                 self._log(f"пропущен (неподдерживаемый формат): {full}")
                 continue
             self.files = [full]
+            self._overrides = {}
+            self._matcher = None
+            self._pending_result = None
+            self._clear_preview()
+            self.save_btn.configure(state="disabled")
             self.file_var.set(os.path.basename(full))
             self.hint_var.set("")
             self._log(f"выбран файл: {full}")

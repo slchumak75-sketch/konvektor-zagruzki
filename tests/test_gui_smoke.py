@@ -82,9 +82,9 @@ def test_window_builds_with_single_file(gui, known_paths):
     assert app.preview.widths["сумма с НДС"] <= 80
     assert app.preview.widths["ед. изм."] == 50
     # без ведомости лишние колонки скрыты — таблица как раньше
-    assert app.preview.options["displaycolumns"] == [
-        "Штрихкод", "Артикул", "Из документа", "ед. изм.", "количество", "цена",
-        "сумма", "ставка НДС", "сумма НДС", "сумма с НДС",
+    assert app.preview.options["displaycolumns"] == ["Штрихкод", "Артикул", "Из документа"]
+    assert app.preview_right.options["displaycolumns"] == [
+        "ед. изм.", "количество", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС"
     ]
     # разлиновка: чередование строк настроено
     assert "odd" in app.preview.tags and "even" in app.preview.tags
@@ -824,17 +824,19 @@ def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
     dialog = _dialog(app)
     # склады заказчика
     assert list(dialog.sklad_buttons) == ["Мир", "Кореличи"]
-    # в списке поставщиков — «как в документе» и все поставщики ведомости
-    values = list(dialog.supplier_box.options.get("values") or [])
-    assert values[0].startswith("— как в документе")
-    assert 'ООО "ОМА"' in values
-
+    # Поставщики зависят от склада, возможен выбор нескольких.
+    assert 'ООО "ОМА"' in dialog.suppliers
+    assert 'ООО "ТД Комплект"' in dialog.suppliers
     dialog.sklad_var.set("Кореличи")
-    dialog.supplier_var.set('ООО "ОМА"')
+    dialog._change_sklad()
+    assert dialog.suppliers == []
+    dialog.sklad_var.set("Мир")
+    dialog._change_sklad()
+    dialog.select_all()
     dialog.on_ok()
-    assert app._sklad == "Кореличи"
-    assert app._supplier_choice == 'ООО "ОМА"'
-    assert app.source_var.get() == 'Кореличи / ООО "ОМА"'
+    assert app._sklad == "Мир"
+    assert app._supplier_choices == ['ООО "ОМА"', 'ООО "ТД Комплект"']
+    assert app.source_var.get() == 'Мир / ООО "ОМА", ООО "ТД Комплект"'
 
 
 def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
@@ -887,3 +889,87 @@ def known_sample_paths():
 
         pytest.skip("нет файла-образца")
     return samples
+
+
+def test_multiple_selection_scope_and_output(gui, tmp_path):
+    import openpyxl
+    app, _, _ = gui
+    path = _write_vedomost(tmp_path)
+    book = openpyxl.load_workbook(path)
+    book.active.append(["Склад Кореличи", "ГАЗ", "", "Газ Кореличи", "шт", 1, 2, 'ООО "ОМА"'])
+    book.active.append(["Склад Мир", "ГАЗ", "", "Газ чужой поставщик", "шт", 1, 2, 'ООО "Чужой"'])
+    book.save(path)
+    app.load_vedomost(path)
+    app._source_chosen("Мир", ['ООО "ТД Комплект"', 'ООО "ОМА"'])
+    app.on_convert(MATCH_NAME)
+    _run(app)
+    assert app._matcher.all_suppliers
+    assert {r.warehouse for r in app._matcher.vedomost.rows} == {"Склад Мир"}
+    assert {r.supplier for r in app._matcher.vedomost.rows} == {'ООО "ОМА"', 'ООО "ТД Комплект"'}
+    row_id, stored = _row_with_doc(app, "Газ")
+    app.open_chooser(row_id)
+    for _, row in app._chooser.items:
+        if getattr(row, "warehouse", None):
+            assert row.warehouse == "Склад Мир"
+            assert row.supplier in app._supplier_choices
+    assert "ООО ОМА, ООО ТД Комплект" in app._pending_result.planned_output
+    app._source_chosen("Кореличи", ['ООО "ОМА"'])
+    assert app._pending_result is None and not app._overrides
+
+
+def test_field_widths_persist_and_reset(gui, tmp_path, monkeypatch):
+    app, module, _ = gui
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app.preview.column("Из документа", width=222)
+    app.preview_right.column("цена", width=91)
+    app.save_field_widths()
+    app.preview.column("Из документа", width=111)
+    app.preview_right.column("цена", width=45)
+    app._load_field_widths()
+    assert app.preview.column("Из документа", "width") == 222
+    assert app.preview_right.column("цена", "width") == 91
+    app.reset_field_widths()
+    assert app.preview.column("Из документа", "width") == module.PREVIEW_WIDTHS[2]
+    assert not (tmp_path / "Konvektor" / "view.json").exists()
+
+
+def test_split_tables_have_synchronized_rows(gui, tmp_path):
+    app, module, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    assert app.preview.options["displaycolumns"] == module.PREVIEW_COLUMNS[:6]
+    assert app.preview_right.options["displaycolumns"] == module.PREVIEW_COLUMNS[6:]
+    assert app.preview.rows == app.preview_right.rows
+    row_id, stored = _row_with_doc(app, "Газ")
+    app._overrides[stored["key"]] = "новое название"
+    app._refresh_row(row_id, stored)
+    assert app.preview.item(row_id)["values"] == app.preview_right.item(row_id)["values"]
+
+
+def test_cancel_source_dialog_requires_new_selection(gui):
+    app, _, dialogs = gui
+    app._source_chosen("Мир", ["Старый поставщик"])
+    dialogs.open_result = (str(next(iter(known_sample_paths()))),)
+    app.on_add_files()
+    app._source_dialog.on_cancel()
+    assert app._source_required
+    app.on_convert()
+    assert app._worker is None
+    assert any(call[0] == "showwarning" and "Выберите склад" in str(call[1])
+               for call in dialogs.calls)
+    app._source_chosen("Кореличи", [])
+    assert not app._source_required
+
+
+def test_select_all_is_reset_on_warehouse_change(gui, tmp_path):
+    app, _, _ = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    app.ask_source()
+    dialog = app._source_dialog
+    dialog.select_all()
+    assert len(dialog.supplier_value) == 2
+    dialog.sklad_var.set("Кореличи")
+    dialog._change_sklad()
+    assert dialog.supplier_value == []
+    dialog.on_ok()
+    assert app._source_required is False
+    assert not app._sklad

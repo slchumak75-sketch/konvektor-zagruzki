@@ -27,7 +27,7 @@ import difflib
 import os
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .readers import read_source
@@ -107,6 +107,7 @@ _LEGAL_FORMS = {
 #: Заголовки колонок ведомости → роль.
 _ROLE_ALIASES = OrderedDict(
     [
+        ("warehouse", ("склад",)),
         ("nomenclature", ("номенклатура", "наименование", "название", "товар")),
         ("article", ("артикул", "код", "артикул поставщика")),
         ("barcode", ("штрихкод", "штрих код", "баркод", "ean", "штриховой код")),
@@ -280,6 +281,7 @@ class VedRow:
     line: int = 0
     #: номер строки во внутреннем списке (для быстрых индексов)
     index: int = field(default=-1, repr=False, compare=False)
+    warehouse: str = ""
     _supplier_key: Optional[str] = field(default=None, repr=False, compare=False)
 
     @property
@@ -369,6 +371,41 @@ class Vedomost:
             name, number = names.get(key, (row.supplier, 0))
             names[key] = (name, number + 1)
         return sorted(names.values(), key=lambda item: (-item[1], item[0].lower()))
+
+    def for_selection(self, warehouse: str = "", suppliers: Sequence[str] = ()) -> "Vedomost":
+        """Независимый индекс только выбранного склада и поставщиков.
+
+        Пустой результат остаётся пустым: никогда не возвращаем позиции другого склада.
+        Копии строк не меняют индексы исходной ведомости и ручные решения.
+        """
+        def warehouse_key(value: str) -> str:
+            value = norm_text(value)
+            return value.removeprefix("склад ").strip()
+
+        wanted = warehouse_key(warehouse)
+        keys = {clean_text(name).casefold() for name in suppliers}
+        rows = [replace(row) for row in self.rows
+                if (not wanted or warehouse_key(row.warehouse) == wanted)
+                and (not keys or clean_text(row.supplier).casefold() in keys)]
+        return Vedomost(rows=rows, path=self.path, sheet=self.sheet,
+                        header_row=self.header_row, roles=self.roles,
+                        warnings=self.warnings).build_index()
+
+    def suppliers_of_warehouse(self, warehouse: str) -> List[Tuple[str, int]]:
+        # Для списка поставщиков индекс поиска строить не нужно.
+        def key(value: str) -> str:
+            return norm_text(value).removeprefix("склад ").strip()
+        wanted = key(warehouse)
+        names: Dict[str, Tuple[str, int]] = {}
+        for row in self.rows:
+            if wanted and key(row.warehouse) != wanted:
+                continue
+            supplier = clean_text(row.supplier)
+            if supplier:
+                supplier_id = supplier.casefold()
+                name, count = names.get(supplier_id, (supplier, 0))
+                names[supplier_id] = name, count + 1
+        return sorted(names.values(), key=lambda item: item[0].casefold())
 
     def rows_of_supplier(self, key: str) -> List[VedRow]:
         if not key:
@@ -606,6 +643,7 @@ def parse_vedomost(source: Any) -> Vedomost:
         )
 
     columns = {
+        "warehouse": roles.get("warehouse"),
         "nomenclature": roles.get("nomenclature"),
         "article": roles.get("article"),
         "barcode": roles.get("barcode"),
@@ -615,6 +653,8 @@ def parse_vedomost(source: Any) -> Vedomost:
         "stock": roles.get("stock"),
         "price": roles.get("price"),
     }
+    if columns["warehouse"] is None:
+        warnings.append("В ведомости нет колонки «Склад»: подбор по складу невозможен.")
     if columns["supplier"] is None:
         warnings.append(
             "в ведомости нет колонки «Последний поставщик» — сверка по поставщику "
@@ -641,6 +681,7 @@ def parse_vedomost(source: Any) -> Vedomost:
         rows.append(
             VedRow(
                 nomenclature=name,
+                warehouse=clean_text(_cell(raw, columns["warehouse"])),
                 article=article,
                 barcode=barcode,
                 unit=clean_text(_cell(raw, columns["unit"])),
@@ -752,7 +793,9 @@ class Matcher:
         overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
         min_score: float = AUTO_SCORE,
         supplier: str = "",
+        all_suppliers: bool = False,
     ) -> None:
+        self.all_suppliers = all_suppliers
         self.vedomost = vedomost
         self.strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
         #: поставщик, выбранный пользователем в окне (пусто — берём из документа)
@@ -775,7 +818,7 @@ class Matcher:
         иначе, а ведомость знает правильное название.
         """
         self._file = path
-        self._supplier_text = self.forced_supplier or clean_text(supplier)
+        self._supplier_text = "" if self.all_suppliers else (self.forced_supplier or clean_text(supplier))
         key, found = self.vedomost.supplier_group(self._supplier_text)
         self._supplier_key = key
         self._supplier_found = found
