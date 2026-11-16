@@ -349,6 +349,8 @@ class KonvektorApp(_Base):
         self.preview.tag_configure("even", background=CARD)
         # строки, где название выбрано/вписано вручную — светло-жёлтые
         self.preview.tag_configure("manual", background="#FFF7E0")
+        # кратковременная подсветка при копировании штрихкода
+        self.preview.tag_configure("copied", background="#C8E6C9")
         # без ведомости двух «лишних» колонок нет — таблица как раньше, 10 колонок
         self.preview.configure(displaycolumns=list(PREVIEW_WITHOUT_VED))
         for title, width, min_width in zip(
