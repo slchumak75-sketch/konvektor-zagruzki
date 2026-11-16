@@ -303,6 +303,9 @@ class KonvektorApp(_Base):
             def configure(self, **kw) -> None:
                 self._menu.entryconfigure(self._index, **kw)
 
+            def cget(self, key: str):
+                return self._menu.entrycget(self._index, key)
+
         self.open_file_btn = _MenuItemProxy(open_menu, 0)
         self.open_folder_btn = _MenuItemProxy(open_menu, 1)
 
@@ -371,8 +374,8 @@ class KonvektorApp(_Base):
 
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
-            bottom, textvariable=self.hint_var, style="Hint.TLabel"
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+            body, textvariable=self.hint_var, style="Hint.TLabel"
+        ).pack(anchor="w", padx=4, pady=(4, 0))
 
         self._clear_preview()
 
