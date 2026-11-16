@@ -372,10 +372,18 @@ class KonvektorApp(_Base):
         self.preview.bind("<Button-4>", self._on_preview_wheel)
         self.preview.bind("<Button-5>", self._on_preview_wheel)
 
+        status_row = ttk.Frame(body, style="Card.TFrame")
+        status_row.pack(fill="x", pady=(4, 0))
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
-            body, textvariable=self.hint_var, style="Hint.TLabel"
-        ).pack(anchor="w", padx=4, pady=(4, 0))
+            status_row, textvariable=self.hint_var, style="Hint.TLabel"
+        ).pack(side="left", padx=4)
+        ttk.Label(
+            status_row, textvariable=self.ved_var, style="Hint.TLabel"
+        ).pack(side="right", padx=4)
+        ttk.Label(
+            status_row, text="Ведомость:", style="Hint.TLabel"
+        ).pack(side="right")
 
         self._clear_preview()
 

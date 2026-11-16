@@ -84,6 +84,26 @@ class SourceDialog:
             self.sklad_buttons[name] = button
 
         ttk.Label(self.win, text="Поставщик:", style="Pick.TLabel").pack(anchor="w", **pad)
+        buttons = ttk.Frame(self.win, style="Pick.TFrame")
+        buttons.pack(side="bottom", fill="x", pady=(8, 12), **pad)
+        self.ok_btn = ttk.Button(
+            buttons, text="Продолжить", style="PickPrimary.TButton", command=self.on_ok
+        )
+        self.ok_btn.pack(side="right")
+        self.cancel_btn = ttk.Button(
+            buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel
+        )
+        self.cancel_btn.pack(side="right", padx=(0, 8))
+
+        self.hint_label = ttk.Label(
+            self.win,
+            text=self._hint(),
+            style="PickHint.TLabel",
+            wraplength=500,
+            justify="left",
+        )
+        self.hint_label.pack(side="bottom", anchor="w", **pad)
+
         list_frame = ttk.Frame(self.win, style="Pick.TFrame")
         list_frame.pack(fill="both", expand=True, pady=(2, 6), **pad)
 
@@ -119,25 +139,6 @@ class SourceDialog:
             cb.pack(anchor="w", padx=6, pady=2)
             self.supplier_vars[name] = var
             self.supplier_checks[name] = cb
-        self.hint_label = ttk.Label(
-            self.win,
-            text=self._hint(),
-            style="PickHint.TLabel",
-            wraplength=500,
-            justify="left",
-        )
-        self.hint_label.pack(anchor="w", **pad)
-
-        buttons = ttk.Frame(self.win, style="Pick.TFrame")
-        buttons.pack(fill="x", pady=(12, 12), **pad)
-        self.ok_btn = ttk.Button(
-            buttons, text="Продолжить", style="PickPrimary.TButton", command=self.on_ok
-        )
-        self.ok_btn.pack(side="right")
-        self.cancel_btn = ttk.Button(
-            buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel
-        )
-        self.cancel_btn.pack(side="right", padx=(0, 8))
 
     def _hint(self) -> str:
         if not self.suppliers:
