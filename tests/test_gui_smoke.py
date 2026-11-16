@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from konvektor.vedomost import MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME
 from tests import fake_tk
 
 
@@ -400,3 +401,190 @@ def test_save_warns_when_written_elsewhere(gui, tmp_path):
     warned = [c for c in dialogs.calls if c[0] == "showwarning"][0]
     text = warned[1][1]
     assert planned in text and actual in text
+
+
+# --------------------------------------------------- ведомость и максимизация
+VEDOMOST_HEADER = [
+    "Склад",
+    "Группа номенклатуры",
+    "Артикул",
+    "Номенклатура",
+    "Ед.",
+    "Конечный\nостаток",
+    "Цена\nпоследнего \nпоставщика",
+    "Последний\nпоставщик",
+]
+
+VEDOMOST_ROWS = [
+    ["Склад Мир", "ГАЗ", "", "Газ сжижен.в однораз.баллоне WERKER 520см3", "шт", "7", "3,20", 'ООО "ОМА"'],
+    ["Склад Мир", "ГЕРМ", "", "Герметик акрил. бел. 280мл WUNDER", "шт", "4", "5,10", 'ООО "ОМА"'],
+    # та же номенклатура, но у чужого поставщика — подбираться не должна
+    ["Склад Мир", "ГАЗ", "", "Газ сжижен.в однораз.баллоне WERKER 520см3", "шт", "2", "3,00", 'ООО "ТД Комплект"'],
+]
+
+
+def _write_vedomost(tmp_path) -> str:
+    """Сделать файл ведомости остатков ТМЦ (те же колонки, что у заказчика)."""
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Лист_1"
+    sheet.append([])
+    sheet.append(["Ведомость по остаткам ТМЦ на складах"])
+    sheet.append([])
+    sheet.append(list(VEDOMOST_HEADER))
+    for row in VEDOMOST_ROWS:
+        sheet.append(list(row))
+    path = tmp_path / "Ведомость 08.11.2026.xlsx"
+    book.save(path)
+    return str(path)
+
+
+def test_window_starts_maximized(gui):
+    """Пользователь просил, чтобы окно сразу было развёрнуто на весь экран."""
+    app, _, _ = gui
+    assert app.state() == "zoomed"
+
+
+def test_cards_are_compact_without_helper_texts(gui):
+    """Плашки «ШАГ 1» и «ШАГ 2» компактные: длинных пояснений в окне нет."""
+    app, _, _ = gui
+    long_texts = [t for t in fake_tk.TEXTS if len(t) > 120]
+    assert long_texts == []
+    joined = " ".join(fake_tk.TEXTS)
+    assert "Поддерживаются .xls" not in joined  # старый текст подсказки
+    assert "Впишите путь" not in joined
+    # а нужные элементы на месте
+    assert any("Загрузить ведомость" in t for t in fake_tk.TEXTS)
+    assert app.ved_var.get() == "не загружена"
+
+
+def test_three_convert_buttons(gui):
+    """Три кнопки конвертации: по штрихкоду, по артикулу, по наименованию."""
+    app, module, _ = gui
+    assert set(app.convert_buttons) == {MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME}
+    texts = [t for t in fake_tk.TEXTS if t.startswith("Конвертировать ")]
+    assert texts == [
+        "Конвертировать по штрихкоду",
+        "Конвертировать по артикулу",
+        "Конвертировать по наименованию",
+    ]
+    # основная кнопка — «по наименованию»
+    assert app.run_btn is app.convert_buttons[MATCH_NAME]
+
+
+def test_load_vedomost(gui, tmp_path):
+    app, _, _ = gui
+    path = _write_vedomost(tmp_path)
+    assert app.load_vedomost(path) is True
+    assert app._vedomost is not None
+    assert app._vedomost.count == len(VEDOMOST_ROWS)
+    assert "позиций 3" in app.ved_var.get()
+    assert "Ведомость 08.11.2026.xlsx" in app.ved_var.get()
+    assert "Ведомость загружена" in app.hint_var.get()
+
+
+def test_load_bad_vedomost_shows_reason(gui, tmp_path):
+    app, _, dialogs = gui
+    junk = tmp_path / "не ведомость.txt"
+    junk.write_text("просто текст\nбез таблицы", encoding="utf-8")
+    assert app.load_vedomost(str(junk)) is False
+    assert app.ved_var.get() == "не загружена"
+    assert "не загружена" in app.hint_var.get()
+    assert any(call[0] == "showwarning" for call in dialogs.calls)
+
+
+def test_convert_with_vedomost_renames_and_offers_review(gui, tmp_path):
+    app, _, _ = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    app.on_convert(MATCH_NAME)
+    _run(app)
+
+    assert "сверено с ведомостью" in app.hint_var.get()
+    assert "будет сохранено" in app.hint_var.get()
+    assert app.review_btn.cget("state") == "normal"
+    names = [row[1][2] for row in app.preview.rows]
+    assert "Газ сжижен.в однораз.баллоне WERKER 520см3" in names
+    assert "Герметик акрил. бел. 280мл WUNDER" in names
+    # позиции, которых нет в ведомости, остаются с наименованием документа
+    assert any(name and "Гидроизол ХКП S10м2 сер. к-сх-б-к/пп-3,5" in name for name in names)
+
+
+def test_save_uses_vedomost_names(gui, tmp_path):
+    """Сохранённый файл содержит наименования из ведомости."""
+    import openpyxl
+
+    app, _, _ = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    out_dir = tmp_path / "Куда сохранить"
+    app.out_var.set(str(out_dir))
+    app.on_convert(MATCH_NAME)
+    _run(app)
+    app.on_save()
+    _run(app)
+
+    written = app._last_outputs[0]
+    assert os.path.dirname(written) == str(out_dir)
+    book = openpyxl.load_workbook(written)
+    names = [row[2] for row in book["Данные"].iter_rows(min_row=2, values_only=True)]
+    assert "Газ сжижен.в однораз.баллоне WERKER 520см3" in names
+
+
+def test_convert_strategy_is_passed_to_matcher(gui, tmp_path):
+    app, _, _ = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    app.on_convert(MATCH_ARTICLE)
+    _run(app)
+    assert app._strategy == MATCH_ARTICLE
+    assert app._matcher.strategy == MATCH_ARTICLE
+    assert "по артикулу" in app.hint_var.get() or "сверено" in app.hint_var.get()
+
+
+def test_review_dialog_manual_choice_and_refusal(gui, tmp_path):
+    """Ручной выбор номенклатуры из ведомости и «не выбирать»."""
+    app, _, _ = gui
+    app.load_vedomost(_write_vedomost(tmp_path))
+    app.on_convert(MATCH_NAME)
+    _run(app)
+
+    from konvektor.review import ReviewDialog
+
+    dialog = ReviewDialog(app, app._matcher, on_done=app._overrides_done)
+    gas_row = None
+    gas_entry = None
+    for row, entry in dialog._entry_by_row.items():
+        if entry.doc_name.startswith("Гидроизол"):
+            gas_row, gas_entry = row, entry
+    assert gas_entry is not None
+
+    # --- «не выбирать»: у позиции остаётся наименование документа
+    dialog.item_tree.selection_set(gas_row)
+    dialog.on_skip()
+    assert dialog.overrides[gas_entry.key] is None
+    assert dialog.changed
+
+    # --- ручной выбор: берём первую позицию ведомости из списка кандидатов
+    row_id = next(iter(dialog._entry_by_row))
+    entry = dialog._entry_by_row[row_id]
+    dialog.item_tree.selection_set(row_id)
+    dialog.on_search()
+    candidate_id = next(iter(dialog._candidate_by_row))
+    candidate = dialog._candidate_by_row[candidate_id]
+    dialog.cand_tree.selection_set(candidate_id)
+    dialog.on_apply()
+    assert dialog.overrides[entry.key] is candidate
+
+    dialog.on_close()
+    assert dialog.win.destroyed
+    # окно передало решения в главное окно и оно пересобрало таблицу
+    _run(app)
+    assert gas_entry.key in app._overrides
+    names = [row[1][2] for row in app.preview.rows]
+    assert "Гидроизол ХКП S10м2 сер. к-сх-б-к/пп-3,5" in names
+
+
+def test_review_requires_vedomost(gui):
+    app, _, dialogs = gui
+    app.on_review()
+    assert any(call[0] == "showinfo" for call in dialogs.calls)

@@ -67,6 +67,9 @@ class ConvertOptions:
     output_dir: str = ""
     #: писать ли файл сразу (False — только разобрать и показать таблицу)
     write: bool = True
+    #: сверка с ведомостью: объект vedomost.Matcher (None — без сверки).
+    #: Переименовывает номенклатуру под ведомость ещё до проверок и записи.
+    matcher: Optional[object] = None
 
 
 @dataclass
@@ -83,6 +86,10 @@ class ConvertResult:
     analysis: Dict[str, AnalysisReport] = field(default_factory=dict)
     #: куда файл был бы записан (заполняется и при write=False)
     planned_output: str = ""
+    #: итог сверки с ведомостью (пусто, если сверки не было): см. Matcher.summary
+    match_summary: Dict[str, object] = field(default_factory=dict)
+    #: строки отчёта о сверке (что проверено, что осталось без подбора)
+    match_log: List[str] = field(default_factory=list)
 
     @property
     def items_count(self) -> int:
@@ -297,6 +304,16 @@ def convert(
         for w in meta.warnings:
             log("  ! " + w)
 
+        matcher = options.matcher
+        if matcher is not None:
+            # сверка по поставщику документа: begin_file задаёт область поиска
+            matcher.begin_file(path, meta.supplier)
+            for item in extracted.items:
+                matcher.apply(item)
+            log(f"  сверка с ведомостью ({getattr(matcher, 'strategy_title', '')}): " + (matcher.summary_text() or "—"))
+            for line in matcher.report_lines():
+                log("  " + line)
+
         analysis = build_report(path, src, extracted, meta)
         analyses[path] = analysis
         result.analysis[path] = analysis
@@ -325,6 +342,15 @@ def convert(
     if not all_items:
         result.notes.append("Позиции товаров не найдены — проверьте структуру файлов")
         return result
+
+    if options.matcher is not None:
+        result.match_summary = dict(options.matcher.summary)
+        result.match_log = list(options.matcher.report_lines())
+        # в лист «Проверки» уходит одна строка-итог, подробности — в match_log,
+        # чтобы ведомость на 30 тысяч строк не превратила отчёт в простыню
+        summary = options.matcher.summary_text()
+        if summary:
+            result.notes.append("сверка с ведомостью: " + summary)
 
     report = validate_items(all_items) if options.validate else ValidationReport(items=all_items)
     check_document_totals(report, totals, blocks)

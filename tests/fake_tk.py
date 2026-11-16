@@ -12,6 +12,10 @@ import types
 from typing import Dict, List
 
 
+#: Тексты всех надписей, созданных в окне (для проверки «нет простыней текста»).
+TEXTS: List[str] = []
+
+
 class Widget:
     """Универсальный виджет: принимает любые аргументы, умеет pack/configure."""
 
@@ -68,6 +72,12 @@ class Widget:
     def winfo_exists(self):
         return True
 
+    def winfo_screenwidth(self):
+        return 1920
+
+    def winfo_screenheight(self):
+        return 1080
+
 
 class Tk(Widget):
     def __init__(self, *a, **k):
@@ -87,6 +97,19 @@ class Tk(Widget):
 
     def minsize(self, *a):
         return None
+
+    def state(self, *a):
+        """Как у настоящего Tk: state("zoomed") разворачивает окно."""
+        if a:
+            self.options["state"] = a[0]
+            return None
+        return self.options.get("state", "normal")
+
+    def attributes(self, *a, **k):
+        if len(a) == 2:
+            self.options["attr:" + str(a[0])] = a[1]
+            return None
+        return self.options.get("attr:" + str(a[0])) if a else None
 
     def protocol(self, *a, **k):
         return None
@@ -114,6 +137,42 @@ class Frame(Widget):
 
 class Label(Widget):
     """Надпись (tk.Label): шапка окна, иконка."""
+
+
+class Toplevel(Widget):
+    """Окно (tk.Toplevel): окно ручной сверки с ведомостью."""
+
+    def __init__(self, master=None, *a, **k):
+        super().__init__(master, *a, **k)
+        self.destroyed = False
+
+    def title(self, *a):
+        if a:
+            self.options["title"] = a[0]
+        return self.options.get("title")
+
+    def geometry(self, *a):
+        if a:
+            self.options["geometry"] = a[0]
+        return self.options.get("geometry")
+
+    def minsize(self, *a):
+        return None
+
+    def transient(self, *a, **k):
+        return None
+
+    def grab_set(self, *a, **k):
+        return None
+
+    def wait_window(self, *a, **k):
+        return None
+
+    def resizable(self, *a, **k):
+        return None
+
+    def destroy(self):
+        self.destroyed = True
 
 
 class Listbox(Widget):
@@ -227,6 +286,7 @@ class Treeview(Widget):
         self.rows: List[tuple] = []
         self.tags: Dict[str, dict] = {}
         self._next_id = 0
+        self._selection: tuple = ()
 
     def tag_configure(self, name, **k):
         self.tags[name] = dict(k)
@@ -263,6 +323,22 @@ class Treeview(Widget):
 
     def xview(self, *a):
         return None
+
+    def selection(self, *a):
+        return tuple(self._selection)
+
+    def selection_set(self, *items):
+        self._selection = tuple(items)
+        return None
+
+    def exists(self, item):
+        return any(row[0] == item for row in self.rows)
+
+    def item(self, item=None, *a, **k):
+        for row in self.rows:
+            if row[0] == item:
+                return {"values": row[1]}
+        return {}
 
 
 class Style(Widget):
@@ -345,6 +421,7 @@ def install() -> types.ModuleType:
         Label,
         Listbox,
         Text,
+        Toplevel,
         Variable,
         Combobox,
         Progressbar,
@@ -358,6 +435,13 @@ def install() -> types.ModuleType:
     tk.END = "end"
     tk.TkVersion = 8.6
 
+    class _RecordingLabel(Widget):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            if "text" in k:
+                TEXTS.append(str(k["text"]))
+
+    TEXTS.clear()
     for name in (
         "Frame",
         "Label",
@@ -369,7 +453,7 @@ def install() -> types.ModuleType:
         "Separator",
         "Notebook",
     ):
-        setattr(ttk, name, type(name, (Widget,), {}))
+        setattr(ttk, name, type(name, (_RecordingLabel,), {}))
     ttk.Combobox = Combobox
     ttk.Progressbar = Progressbar
     ttk.Treeview = Treeview

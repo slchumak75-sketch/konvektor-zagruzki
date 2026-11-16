@@ -9,6 +9,7 @@ import sys
 from typing import List, Optional
 
 from . import APP_NAME, __version__
+from .vedomost import MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME, MATCH_TITLES, Matcher, load_vedomost
 from .pipeline import (
     MODE_COMBINED,
     MODE_FILES,
@@ -59,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-columns",
         action="store_true",
         help="добавить в таблицу колонки «файл» и «строка» (в окне они добавляются всегда)",
+    )
+    p.add_argument(
+        "--vedomost",
+        metavar="ФАЙЛ",
+        help="ведомость остатков ТМЦ: сверить номенклатуру и переименовать позиции",
+    )
+    p.add_argument(
+        "--match",
+        choices=(MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME),
+        default=MATCH_NAME,
+        help="чем сверять с ведомостью: barcode — штрихкод, article — артикул, "
+        "name — наименование (по умолчанию)",
     )
     p.add_argument("--strict", action="store_true", help="вернуть код 3, если найдены расхождения в суммах")
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
@@ -125,6 +138,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = args.output or ""
     if os.path.splitext(out)[1].lower() in (".xlsx", ".xlsm", ".xls"):
         out = os.path.dirname(out)
+    matcher = None
+    if args.vedomost:
+        try:
+            vedomost = load_vedomost(args.vedomost)
+        except ValueError as exc:
+            print("ОШИБКА ведомости: " + str(exc), file=sys.stderr)
+            return 2
+        matcher = Matcher(vedomost, args.match)
+        log(
+            f"ведомость: {os.path.basename(args.vedomost)} — позиций {vedomost.count}, "
+            f"поставщиков {len(vedomost.suppliers)}; сверка {MATCH_TITLES[matcher.strategy]}"
+        )
+
     options = ConvertOptions(
         mode=args.mode,
         validate=not args.no_validate,
@@ -132,6 +158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         naming="auto",
         output_dir=out,
         add_source_columns=args.source_columns,
+        matcher=matcher,
     )
     result = convert(files, "", options, log=log, recursive=args.recursive)
 
@@ -162,6 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 }
                 for path, meta in result.metas.items()
             ],
+            "match": result.match_summary,
             "analysis": [report.as_dict() for report in result.analysis.values()],
             "stats": [
                 {
@@ -178,6 +206,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
+    if matcher is not None:
+        print(matcher.summary_text(), file=sys.stderr)
     if result.errors:
         for e in result.errors:
             print("ОШИБКА: " + e, file=sys.stderr)

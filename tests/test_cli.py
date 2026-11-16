@@ -106,3 +106,59 @@ def test_output_is_folder_and_name_is_supplier_date(known_paths, tmp_path, capsy
     assert main([str(path), "-o", str(other / "Результат.xlsx"), "--json", "-q"]) == 0
     payload = _first_json(capsys.readouterr().out)
     assert payload["outputs"] == [str(other / f"ООО ОМА {dt.date.today():%d.%m.%Y}.xlsx")]
+
+
+def _write_vedomost(tmp_path):
+    """Небольшая ведомость остатков ТМЦ в том же формате, что у заказчика."""
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Лист_1"
+    sheet.append(["Ведомость по остаткам ТМЦ на складах"])
+    sheet.append(
+        ["Склад", "Группа номенклатуры", "Артикул", "Номенклатура", "Ед.",
+         "Конечный\nостаток", "Цена\nпоследнего \nпоставщика", "Последний\nпоставщик"]
+    )
+    sheet.append(["Склад Мир", "ГАЗ", "", "Газ сжижен.в однораз.баллоне WERKER 520см3",
+                  "шт", "7", "3,20", 'ООО "ОМА"'])
+    path = tmp_path / "Ведомость.xlsx"
+    book.save(path)
+    return path
+
+
+def test_cli_sverka_with_vedomost(known_paths, tmp_path, capsys):
+    """--vedomost переименовывает номенклатуру под ведомость и пишет итог."""
+    path = _known(known_paths, "Кореличи")
+    if path is None:
+        pytest.skip("нет файла-образца")
+    ved = _write_vedomost(tmp_path)
+    out = tmp_path / "результат"
+    code = main(
+        [str(path), "-o", str(out), "--vedomost", str(ved), "--match", "name", "--json"]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    payload = _first_json(captured.out)
+    assert payload["match"]["items"] == 11
+    assert payload["match"]["matched"] >= 1
+    assert payload["match"]["supplier_found"] is True
+    assert payload["match"]["strategy"] == "name"
+    assert "сверено с ведомостью" in captured.err
+
+    import openpyxl
+
+    written = payload["outputs"][0]
+    book = openpyxl.load_workbook(written)
+    names = [row[2] for row in book["Данные"].iter_rows(min_row=2, values_only=True)]
+    assert "Газ сжижен.в однораз.баллоне WERKER 520см3" in names
+
+
+def test_cli_bad_vedomost_is_reported(known_paths, tmp_path, capsys):
+    path = _known(known_paths, "Кореличи")
+    if path is None:
+        pytest.skip("нет файла-образца")
+    junk = tmp_path / "junk.txt"
+    junk.write_text("не ведомость", encoding="utf-8")
+    assert main([str(path), "-o", str(tmp_path), "--vedomost", str(junk), "-q"]) == 2
+    assert "ОШИБКА ведомости" in capsys.readouterr().err

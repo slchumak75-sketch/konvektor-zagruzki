@@ -35,6 +35,7 @@ from .pipeline import (
     documents_dir,
     is_supported,
 )
+from .vedomost import MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME, MATCH_TITLES, Matcher, load_vedomost
 from .writer import plain_number
 
 try:  # pragma: no cover - зависит от сборки Python
@@ -127,11 +128,19 @@ class KonvektorApp(_Base):
         self._pending_source: Optional[str] = None
         self._pending_out: str = ""
         self._pending_result: Optional[ConvertResult] = None
+        # сверка с ведомостью: загруженная ведомость, выбранный способ подбора
+        # и ручные решения пользователя (они переживают повторную конвертацию)
+        self._vedomost = None
+        self._ved_path = ""
+        self._strategy = MATCH_NAME
+        self._matcher: Optional[Matcher] = None
+        self._overrides: dict = {}
 
         self._set_window_icon()
         self._build_ui()
         if initial_files:
             self._add_files(initial_files)
+        self._maximize()
         self.after(120, self._poll_queue)
 
     # ------------------------------------------------------------------ UI
@@ -182,24 +191,31 @@ class KonvektorApp(_Base):
         body = tk.Frame(self, background=BG)
         body.pack(fill="both", expand=True, padx=16, pady=14)
 
-        # --- шаг 1: файл
-        top = self._card(body, "ШАГ 1 · Файл для конвертации (по одному)")
+        # --- шаг 1: файл и ведомость (компактно, без пояснений)
+        top = self._card(body, "ШАГ 1 · Файл и ведомость")
         row = ttk.Frame(top, style="Card.TFrame")
-        row.pack(fill="x", padx=14, pady=(10, 4))
+        row.pack(fill="x", padx=14, pady=(10, 6))
+        ttk.Label(row, text="Файл:", style="Card.TLabel").pack(side="left")
         self.file_var = tk.StringVar(value="файл не выбран")
         ttk.Label(
             row, textvariable=self.file_var, style="File.TLabel", anchor="w"
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(side="left", fill="x", expand=True, padx=(8, 8))
         ttk.Button(
             row, text="Выбрать файл…", style="Secondary.TButton",
             command=self.on_add_files,
         ).pack(side="right")
+
+        vrow = ttk.Frame(top, style="Card.TFrame")
+        vrow.pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Label(vrow, text="Ведомость:", style="Card.TLabel").pack(side="left")
+        self.ved_var = tk.StringVar(value="не загружена")
         ttk.Label(
-            top,
-            text="Поддерживаются .xls, .xlsx, .csv, .txt, .html. "
-            "Файл можно перетащить мышью на ярлык Konvektor.exe.",
-            style="Hint.TLabel",
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+            vrow, textvariable=self.ved_var, style="Ved.TLabel", anchor="w"
+        ).pack(side="left", fill="x", expand=True, padx=(8, 8))
+        ttk.Button(
+            vrow, text="Загрузить ведомость…", style="Secondary.TButton",
+            command=self.on_load_vedomost,
+        ).pack(side="right")
 
         # --- шаг 2: куда сохранить
         mid = self._card(body, "ШАГ 2 · Куда сохранить")
@@ -217,42 +233,50 @@ class KonvektorApp(_Base):
             prow, text="Обзор…", style="Secondary.TButton", command=self.on_browse_output
         ).pack(side="left")
 
-        ttk.Label(
-            mid,
-            text="Впишите путь, вставьте его из проводника или нажмите «Обзор…». "
-            "Пусто — папка «Документы». Имя файла программа задаёт сама: "
-            "«поставщик + сегодняшняя дата.xlsx» (например, «ООО ОМА 15.11.2026.xlsx»); "
-            "если такой файл уже есть, новый сохранится как «… (2).xlsx» — "
-            "старый не затирается.",
-            style="Hint.TLabel",
-            wraplength=1060,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+        prow.pack_configure(pady=(10, 10))
 
-        # --- кнопки действий
+        # --- кнопки: три способа сверки, затем сохранение и открытие
         act = ttk.Frame(body, style="Card.TFrame")
         act.pack(fill="x", pady=(2, 10))
 
-        self.run_btn = ttk.Button(
-            act, text="Конвертировать", style="Primary.TButton", command=self.on_convert
-        )
-        self.run_btn.pack(side="left")
+        convert_row = ttk.Frame(act, style="Card.TFrame")
+        convert_row.pack(fill="x")
+        self.convert_buttons = {}
+        for strategy in (MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME):
+            button = ttk.Button(
+                convert_row,
+                text="Конвертировать " + MATCH_TITLES[strategy],
+                style="Primary.TButton",
+                command=lambda s=strategy: self.on_convert(s),
+            )
+            button.pack(side="left", padx=(0, 8))
+            self.convert_buttons[strategy] = button
+        # «по наименованию» — основная кнопка (её и нажимают чаще всего)
+        self.run_btn = self.convert_buttons[MATCH_NAME]
+
+        tools_row = ttk.Frame(act, style="Card.TFrame")
+        tools_row.pack(fill="x", pady=(8, 0))
         self.save_btn = ttk.Button(
-            act, text="Сохранить", style="Secondary.TButton",
+            tools_row, text="Сохранить", style="Secondary.TButton",
             command=self.on_save, state="disabled",
         )
-        self.save_btn.pack(side="left", padx=(10, 0))
-
-        self.open_file_btn = ttk.Button(
-            act, text="Открыть файл", style="Ghost.TButton",
-            command=self.on_open_result, state="disabled",
+        self.save_btn.pack(side="left")
+        self.review_btn = ttk.Button(
+            tools_row, text="Сверить с ведомостью…", style="Secondary.TButton",
+            command=self.on_review, state="disabled",
         )
-        self.open_file_btn.pack(side="left", padx=(10, 0))
+        self.review_btn.pack(side="left", padx=(10, 0))
+
         self.open_folder_btn = ttk.Button(
-            act, text="Открыть папку", style="Ghost.TButton",
+            tools_row, text="Открыть папку", style="Ghost.TButton",
             command=self.on_open_folder, state="disabled",
         )
-        self.open_folder_btn.pack(side="left", padx=(8, 0))
+        self.open_folder_btn.pack(side="right")
+        self.open_file_btn = ttk.Button(
+            tools_row, text="Открыть файл", style="Ghost.TButton",
+            command=self.on_open_result, state="disabled",
+        )
+        self.open_file_btn.pack(side="right", padx=(0, 8))
 
         # --- шаг 3: предпросмотр результата вместо журнала
         bottom = self._card(body, "ШАГ 3 · Результат (таблица)")
@@ -305,6 +329,30 @@ class KonvektorApp(_Base):
         ).pack(anchor="w", padx=14, pady=(0, 10))
 
         self._clear_preview()
+
+    def _maximize(self) -> None:
+        """Развернуть окно на весь экран сразу при запуске.
+
+        Windows понимает state("zoomed"), Linux/X11 — attributes("-zoomed").
+        Если оконный менеджер не поддерживает ни то, ни другое, окно просто
+        остаётся 1180×780 (и его можно развернуть обычной кнопкой).
+        """
+        try:
+            self.state("zoomed")
+            return
+        except Exception:  # noqa: BLE001 - не Windows
+            pass
+        try:
+            self.attributes("-zoomed", True)
+            return
+        except Exception:  # noqa: BLE001 - оконный менеджер не умеет
+            pass
+        try:
+            width = self.winfo_screenwidth()
+            height = self.winfo_screenheight()
+            self.geometry(f"{width}x{height}+0+0")
+        except Exception:  # noqa: BLE001 - не критично
+            pass
 
     def _card(self, parent, title: str):
         """Белая карточка раздела с подписью-шагом."""
@@ -375,6 +423,51 @@ class KonvektorApp(_Base):
             )
             style.configure("Hint.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
             style.configure(
+                "Ved.TLabel",
+                background=CARD,
+                foreground=OK_GREEN,
+                font=("Segoe UI", 9),
+            )
+            # --- окно ручной сверки (konvektor/review.py)
+            style.configure("Review.TFrame", background=BG)
+            style.configure("Review.TLabel", background=BG, foreground=TEXT)
+            style.configure("ReviewHint.TLabel", background=BG, foreground=MUTED)
+            style.configure(
+                "Review.TLabelframe",
+                background=CARD,
+                bordercolor=BORDER,
+                relief="solid",
+                borderwidth=1,
+            )
+            style.configure(
+                "Review.TLabelframe.Label",
+                background=BG,
+                foreground=NAVY,
+                font=("Segoe UI", 9, "bold"),
+            )
+            style.configure(
+                "Review.TButton",
+                font=("Segoe UI", 9),
+                padding=(10, 6),
+                background=CARD,
+                foreground=NAVY,
+                bordercolor=BORDER,
+            )
+            style.map("Review.TButton", background=[("active", "#E8EEF8")])
+            style.configure(
+                "ReviewPrimary.TButton",
+                font=("Segoe UI", 9, "bold"),
+                padding=(12, 7),
+                background=ACCENT,
+                foreground="#FFFFFF",
+                borderwidth=0,
+            )
+            style.map(
+                "ReviewPrimary.TButton",
+                background=[("disabled", "#B9C7DA"), ("active", ACCENT_DARK)],
+                foreground=[("disabled", "#F0F4FA")],
+            )
+            style.configure(
                 "Primary.TButton",
                 font=("Segoe UI", 10, "bold"),
                 padding=(20, 9),
@@ -444,6 +537,75 @@ class KonvektorApp(_Base):
         if path:
             self._add_files([path])
 
+    # ------------------------------------------------------------- ведомость
+    def on_load_vedomost(self) -> None:
+        """Выбрать файл ведомости остатков ТМЦ (читается в фоне)."""
+        path = filedialog.askopenfilename(
+            title="Выберите ведомость остатков ТМЦ",
+            filetypes=[
+                ("Ведомость", "*.xlsx *.xls *.xlsm *.csv"),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        self._set_busy(True)
+        self.hint_var.set(f"читаю ведомость: {os.path.basename(path)}…")
+
+        def worker() -> None:
+            try:
+                vedomost = load_vedomost(path)
+                self._queue.put(("ved", (path, vedomost)))
+            except Exception as exc:  # noqa: BLE001 - показываем пользователю
+                self._queue.put(("ved_error", (path, exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def load_vedomost(self, path: str) -> bool:
+        """Прочитать ведомость синхронно (так же, как фоновая загрузка)."""
+        try:
+            vedomost = load_vedomost(path)
+        except Exception as exc:  # noqa: BLE001 - понятное сообщение пользователю
+            self._vedomost_failed(path, exc)
+            return False
+        self._vedomost_loaded(path, vedomost)
+        return True
+
+    def _vedomost_loaded(self, path: str, vedomost) -> None:
+        self._set_busy(False)
+        self._vedomost = vedomost
+        self._ved_path = path
+        # ручные решения относились к прошлой ведомости — сбрасываем
+        self._overrides = {}
+        self._matcher = None
+        self.review_btn.configure(state="disabled")
+        self.ved_var.set(self._vedomost_text(vedomost))
+        hint = (
+            f"Ведомость загружена: {os.path.basename(path)}. "
+            "Выберите файл и нажмите одну из кнопок «Конвертировать»."
+        )
+        if vedomost.warnings:
+            hint = vedomost.warnings[0]
+        self.hint_var.set(hint)
+        self._log(f"ведомость: {path} ({vedomost.count} позиций)")
+
+    def _vedomost_failed(self, path: str, exc: Exception) -> None:
+        self._set_busy(False)
+        message = str(exc) or type(exc).__name__
+        self.ved_var.set("не загружена")
+        self.hint_var.set("Ведомость не загружена: " + message)
+        messagebox.showwarning(APP_NAME, "Не удалось загрузить ведомость\n\n" + message)
+
+    @staticmethod
+    def _vedomost_text(vedomost) -> str:
+        """Короткая строка о ведомости: имя, позиции, поставщики."""
+        name = os.path.basename(getattr(vedomost, "path", "") or "")
+        suppliers = len(vedomost.suppliers)
+        text = f"{name} — позиций {vedomost.count}"
+        if suppliers:
+            text += f", поставщиков {suppliers}"
+        return text
+
     def on_browse_output(self) -> None:
         """Выбрать папку в диалоге «Обзор…» (имя файла задаёт программа)."""
         current = self.output_dir()
@@ -479,15 +641,30 @@ class KonvektorApp(_Base):
         return os.path.normpath(value)
 
     # ------------------------------------------------------------ конвертация
-    def on_convert(self) -> None:
+    def on_convert(self, strategy: str = MATCH_NAME) -> None:
+        """«Конвертировать по штрихкоду / артикулу / наименованию».
+
+        Без загруженной ведомости все три кнопки делают обычную конвертацию:
+        сверять не с чем. С ведомостью — подбирают номенклатуру выбранным
+        способом (по поставщику документа) и переименовывают позиции.
+        """
         if self._running:
             return
         if not self.files:
             messagebox.showwarning(APP_NAME, "Сначала выберите файл.")
             return
+        self._start_convert(self.files[0], strategy, write=False)
 
-        path = self.files[0]
+    def _start_convert(self, path: str, strategy: str = MATCH_NAME, write: bool = False) -> None:
+        """Запустить разбор файла в фоне (write=False — только показать таблицу)."""
         folder = self.output_dir()
+        self._strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
+        matcher = None
+        if self._vedomost is not None:
+            # ручные решения пользователя (выбор/«не выбирать») переживают
+            # повторную конвертацию — иначе они бы терялись при каждом нажатии
+            matcher = Matcher(self._vedomost, self._strategy, self._overrides)
+        self._matcher = matcher
         options = ConvertOptions(
             mode=MODE_COMBINED,
             # в файле ровно те же 10 колонок, что в образце:
@@ -497,15 +674,17 @@ class KonvektorApp(_Base):
             naming="auto",
             output_dir=folder,
             # «Конвертировать» только показывает таблицу; пишет «Сохранить»
-            write=False,
+            write=write,
+            matcher=matcher,
         )
 
-        self._running = True
-        self.run_btn.configure(state="disabled")
+        self._set_busy(True)
         self.save_btn.configure(state="disabled")
+        self.review_btn.configure(state="disabled")
         self._pending_source = path
         self._pending_out = folder
-        self._pending_result = None
+        if not write:
+            self._pending_result = None
         self.open_file_btn.configure(state="disabled")
         self.open_folder_btn.configure(state="disabled")
         self.hint_var.set("")
@@ -513,11 +692,13 @@ class KonvektorApp(_Base):
         self._clear_preview()
         self._log(f"{APP_NAME} {__version__}")
         self._log(f"файл: {os.path.basename(path)}")
+        if matcher is not None:
+            self._log("сверка с ведомостью: " + matcher.strategy_title)
 
         def worker() -> None:
             try:
                 result = convert([path], folder, options, log=lambda m: self._queue.put(("log", m)))
-                self._queue.put(("done", result))
+                self._queue.put(("saved" if write else "done", result))
             except Exception as exc:  # noqa: BLE001 - показываем пользователю
                 self._queue.put(("error", (exc, traceback.format_exc())))
 
@@ -541,30 +722,34 @@ class KonvektorApp(_Base):
 
         # ВАЖНО: путь читаем из поля заново — пользователь мог изменить его
         # после «Конвертировать». Раньше здесь брался снимок, и файл уходил
-        # в старую папку.
-        folder = self.output_dir()
-        self._pending_out = folder
-        options = ConvertOptions(
-            mode=MODE_COMBINED,
-            add_source_columns=False,
-            naming="auto",
-            output_dir=folder,
-            write=True,
-        )
+        # в старую папку. Способ сверки тоже берём тот, которым конвертировали.
+        self._pending_out = self.output_dir()
+        self._start_convert(path, self._strategy, write=True)
 
-        self._running = True
-        self.save_btn.configure(state="disabled")
-        self.run_btn.configure(state="disabled")
+    def on_review(self) -> None:
+        """Открыть окно ручного выбора номенклатуры из ведомости."""
+        if self._vedomost is None:
+            messagebox.showinfo(APP_NAME, "Сначала нажмите «Загрузить ведомость…».")
+            return
+        if self._matcher is None or not self._matcher.entries:
+            messagebox.showinfo(
+                APP_NAME, "Сначала конвертируйте файл — сверять пока нечего."
+            )
+            return
+        try:
+            from .review import ReviewDialog
 
-        def worker() -> None:
-            try:
-                result = convert([path], folder, options, log=lambda m: self._queue.put(("log", m)))
-                self._queue.put(("saved", result))
-            except Exception as exc:  # noqa: BLE001 - показываем пользователю
-                self._queue.put(("error", (exc, traceback.format_exc())))
+            ReviewDialog(self, self._matcher, on_done=self._overrides_done)
+        except Exception as exc:  # noqa: BLE001 - окно не должно ронять программу
+            messagebox.showwarning(APP_NAME, f"Не удалось открыть окно сверки:\n{exc}")
 
-        self._worker = threading.Thread(target=worker, daemon=True)
-        self._worker.start()
+    def _overrides_done(self, overrides: dict) -> None:
+        """Пользователь закрыл окно сверки — пересобрать таблицу с его выбором."""
+        if overrides == self._overrides:
+            return
+        self._overrides = dict(overrides)
+        if self._pending_source and os.path.exists(self._pending_source):
+            self._start_convert(self._pending_source, self._strategy, write=False)
 
     def on_open_result(self) -> None:
         """Открыть сохранённый файл в Excel (или чем он открыт в системе)."""
@@ -596,9 +781,11 @@ class KonvektorApp(_Base):
             messagebox.showinfo(APP_NAME, f"Не удалось открыть:\n{path}\n\n{exc}")
 
     def _saved(self, result: ConvertResult) -> None:
-        self._running = False
-        self.run_btn.configure(state="normal")
+        self._set_busy(False)
         self.save_btn.configure(state="normal")
+        self.review_btn.configure(
+            state="normal" if self._matcher is not None else "disabled"
+        )
         self._last_outputs = list(result.outputs)
         if not result.outputs:
             messagebox.showwarning(APP_NAME, "; ".join(result.errors) or "Файл не записан.")
@@ -631,6 +818,10 @@ class KonvektorApp(_Base):
                     self._finish(payload)
                 elif kind == "saved":
                     self._saved(payload)
+                elif kind == "ved":
+                    self._vedomost_loaded(*payload)
+                elif kind == "ved_error":
+                    self._vedomost_failed(*payload)
                 elif kind == "error":
                     self._fail(*payload)
         except queue.Empty:
@@ -638,11 +829,12 @@ class KonvektorApp(_Base):
         self.after(120, self._poll_queue)
 
     def _finish(self, result: ConvertResult) -> None:
-        self._running = False
-        self.run_btn.configure(state="normal")
+        self._set_busy(False)
         self._last_outputs = list(result.outputs)
         self._pending_result = result
         self.save_btn.configure(state="normal" if result.items_count else "disabled")
+        has_match = self._matcher is not None and bool(self._matcher.entries)
+        self.review_btn.configure(state="normal" if has_match else "disabled")
 
         self._show_preview(result.items)
         self._log("")
@@ -668,13 +860,16 @@ class KonvektorApp(_Base):
         self._clear_files()
 
         planned = result.planned_output
+        parts = []
+        if result.match_summary:
+            parts.append(self._match_hint())
         if planned and result.items_count:
             folder, name = os.path.split(planned)
-            self.hint_var.set(
-                f"{docs} → будет сохранено: {folder} / {name} (кнопка «Сохранить»)"
-            )
+            parts.append(f"будет сохранено: {folder} / {name} (кнопка «Сохранить»)")
         elif docs:
-            self.hint_var.set(docs)
+            parts.append(docs)
+        if parts:
+            self.hint_var.set(" · ".join(part for part in parts if part))
 
         if result.items_count:
             text = (
@@ -684,6 +879,14 @@ class KonvektorApp(_Base):
                 f"Предупреждений: {result.warning_count}\n"
                 f"Значений рассчитано программой: {result.computed_count}"
             )
+            if result.match_summary:
+                text += "\n\nСверка с ведомостью (" + self._strategy_title() + "): "
+                text += self._match_hint()
+                if result.match_summary.get("review"):
+                    text += (
+                        "\nПроверьте подобранные позиции кнопкой «Сверить с ведомостью…»:"
+                        " номенклатуру можно выбрать вручную или не выбирать вовсе."
+                    )
             if planned:
                 text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
             if result.errors:
@@ -701,12 +904,31 @@ class KonvektorApp(_Base):
             )
 
     def _fail(self, exc: Exception, tb: str) -> None:
-        self._running = False
-        self.run_btn.configure(state="normal")
+        self._set_busy(False)
         self._log("ОШИБКА: " + str(exc))
         self._log(tb)
         messagebox.showerror(APP_NAME, f"Произошла ошибка:\n{exc}")
         self._clear_files()
+
+    # ------------------------------------------------------- сверка/состояние
+    def _strategy_title(self) -> str:
+        return MATCH_TITLES.get(self._strategy, MATCH_TITLES[MATCH_NAME])
+
+    def _match_hint(self) -> str:
+        """Одна строка об итогах сверки с ведомостью."""
+        if self._matcher is None:
+            return ""
+        return self._matcher.summary_text()
+
+    def _set_busy(self, busy: bool) -> None:
+        """Пока идёт работа, все кнопки запуска недоступны."""
+        self._running = busy
+        state = "disabled" if busy else "normal"
+        for button in getattr(self, "convert_buttons", {}).values():
+            button.configure(state=state)
+        if busy:
+            self.save_btn.configure(state="disabled")
+            self.review_btn.configure(state="disabled")
 
     # --------------------------------------------------------------- утилиты
     def _show_preview(self, items: List[Item], limit: int = PREVIEW_LIMIT) -> None:
@@ -788,7 +1010,7 @@ class KonvektorApp(_Base):
         if not self.files:
             self.hint_var.set("")
             return
-        self.hint_var.set("Файл выбран — нажмите «Конвертировать»")
+        self.hint_var.set("Файл выбран — нажмите «Конвертировать по наименованию»")
 
     def _log(self, message: str) -> None:
         self.log_lines.append(message)

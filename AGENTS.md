@@ -60,7 +60,10 @@ Windows-программа (Python + tkinter + PyInstaller), которая пр
 | Интерфейс окна | `konvektor/gui.py` | `KonvektorApp` (один файл, предпросмотр таблицы) |
 | Имя результата «поставщик/дата» | `konvektor/pipeline.py` | `output_path_for`, `safe_path_part`, `ConvertOptions.naming` |
 | Поставщик — не наша организация | `konvektor/meta.py` | `_supplier_and_buyer`, `is_our_company`, `our_companies`, `DEFAULT_OUR_COMPANIES` |
-| Ключи командной строки | `konvektor/cli.py` | `build_parser`, `main` |
+| Сверка с ведомостью остатков ТМЦ | `konvektor/vedomost.py` | `parse_vedomost`, `Vedomost.candidates`, `Matcher` |
+| Пороги и оценка похожести названий | `konvektor/vedomost.py` | `similarity`, `AUTO_SCORE`, `CONFIDENT_SCORE`, `_token_pair` |
+| Окно ручного выбора номенклатуры | `konvektor/review.py` | `ReviewDialog` |
+| Ключи командной строки | `konvektor/cli.py` | `build_parser`, `main` (`--vedomost`, `--match`) |
 | Сборка/CI | `.github/workflows/build.yml` | — |
 
 ## 4. Алгоритм добавления нового поставщика (пошагово)
