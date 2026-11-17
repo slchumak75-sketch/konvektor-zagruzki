@@ -97,8 +97,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe (--json) не прошла: код $LASTEXITCODE" }
           Get-Content $env:TEMP\selftest.json | Select-Object -Last 3
 
-          if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
-          Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
+          if (-not (Test-Path .\dist\Konvektor\Konvektor.exe)) { throw "Konvektor.exe не собран" }
+          Get-Item .\dist\Konvektor\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
 
       - name: Упаковать в ZIP
         shell: pwsh
