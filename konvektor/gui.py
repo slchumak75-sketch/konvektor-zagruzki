@@ -530,8 +530,16 @@ class KonvektorApp(_Base):
                 foreground="#000000",
                 rowheight=23,
                 borderwidth=1,
+                bordercolor=GRID_COLOR,
+                lightcolor=GRID_COLOR,
+                darkcolor=GRID_COLOR,
                 relief="solid",
                 font=("Segoe UI", 9),
+            )
+            style.configure(
+                "Grid.Treeview.Cell",
+                borderwidth=1,
+                relief="solid",
             )
             style.configure(
                 "Grid.Treeview.Heading",
@@ -1122,8 +1130,9 @@ class KonvektorApp(_Base):
                         box = self.preview.bbox(row_id, "#1")
                         if box:
                             x, y, w, h = box
+                            parent = self.preview.master or self.preview
                             flash = tk.Label(
-                                self.preview,
+                                parent,
                                 text=barcode,
                                 background="#C8E6C9",
                                 foreground="#1B5E20",
@@ -1134,6 +1143,7 @@ class KonvektorApp(_Base):
                                 padx=4,
                             )
                             flash.place(x=x, y=y, width=w, height=h)
+                            flash.lift()
                             self.after(1000, flash.destroy)
                     except Exception:  # noqa: BLE001
                         pass
