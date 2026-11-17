@@ -249,7 +249,8 @@ class _VedChooser:
             pass
         height = min(320, 26 * len(self.items) + 34)
         try:
-            self.win.geometry(f"{int(width)}x{int(height)}+{int(x)}+{int(y)}")
+            popup_w = max(int(width), 620)
+            self.win.geometry(f"{popup_w}x{int(height)}+{int(x)}+{int(y)}")
         except Exception:  # noqa: BLE001 - не критично
             pass
 
