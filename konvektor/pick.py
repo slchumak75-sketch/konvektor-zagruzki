@@ -57,32 +57,31 @@ class SourceDialog:
         self.win = tk.Toplevel(master)
         try:
             self.win.title("Склад и поставщик")
-            self.win.geometry("620x420")
             self.win.configure(background=BG)
             self.win.transient(master)
-            # делаем диалог строго по высоте экрана и недвигаемым мышкой (требование 1.9.19)
             try:
                 self.win.resizable(False, False)
                 self.win.attributes("-topmost", True)
-                self.win.after(200, lambda: self.win.attributes("-topmost", False))
+                self.win.after(300, lambda: self.win.attributes("-topmost", False))
             except Exception:
                 pass
             screen_h = self.win.winfo_screenheight()
             screen_w = self.win.winfo_screenwidth()
             if screen_h and screen_h > 200:
-                # строго по высоте экрана — как таблица: на весь экран по вертикали
-                full_h = screen_h
-                # центрируем по горизонтали, y=0 — от верхнего края до низа
+                # строго по высоте экрана — как таблица, оставляем место под панель задач
+                full_h = max(520, screen_h - 60)
                 x = max(0, (screen_w - 640) // 2) if screen_w else 100
-                self.win.geometry(f"640x{full_h}+{x}+0")
-                # запрещаем перетаскивание мышкой: фиксируем положение
+                y = 20
+                self.win.geometry(f"640x{full_h}+{x}+{y}")
                 self._locked_x = x
-                self._locked_y = 0
+                self._locked_y = y
                 self._locked_h = full_h
                 try:
                     self.win.bind("<Configure>", self._lock_position)
                 except Exception:
                     pass
+            else:
+                self.win.geometry("640x700+100+20")
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
 
@@ -95,15 +94,10 @@ class SourceDialog:
     def _lock_position(self, event=None) -> None:
         """Не давать двигать окно мышкой — возвращаем на зафиксированное место."""
         try:
-            # срабатывает на любой Configure (перемещение/ресайз дочерних — тоже),
-            # поэтому проверяем только геометрию самого Toplevel
             if getattr(event, "widget", None) is not self.win:
                 return
-            # geometry вида "640x1080+100+0"
             geom = self.win.geometry()
-            # если пользователь сдвинул — возвращаем
             wanted = f"640x{self._locked_h}+{self._locked_x}+{self._locked_y}"
-            # сравниваем позицию
             if "+" in geom:
                 parts = geom.split("+")
                 if len(parts) == 3:
@@ -111,7 +105,6 @@ class SourceDialog:
                     if cur_x != self._locked_x or cur_y != self._locked_y:
                         self.win.geometry(wanted)
                         return
-                # также следим за размером
                 wh = parts[0]
                 if "x" in wh:
                     cur_w, cur_h = wh.split("x")
@@ -123,16 +116,16 @@ class SourceDialog:
     # ------------------------------------------------------------------ вёрстка
     def _build(self) -> None:
         pad = {"padx": 20}
-        # заголовок-карточка
+        # заголовок
         header = tk.Frame(self.win, background=NAVY, height=56)
-        header.pack(fill="x")
+        header.pack(fill="x", side="top")
         header.pack_propagate(False)
         tk.Label(header, text="  \U0001F4E6  Склад и поставщик", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="both", expand=True, padx=14, pady=10)
 
-        # карточка склада — наглядный выбор (крупные кнопки с иконками, но поуже по высоте — 1.9.19)
+        # карточка склада — поуже по высоте (1.9.19/1.9.20)
         card = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
-        card.pack(fill="x", padx=16, pady=(14, 10))
-        tk.Label(card, text="Выберите склад — куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(8, 4))
+        card.pack(fill="x", side="top", padx=16, pady=(14, 8))
+        tk.Label(card, text="Выберите склад — куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(8, 2))
         sklad_row = tk.Frame(card, background=CARD)
         sklad_row.pack(fill="x", padx=12, pady=(4, 8))
         self.sklad_buttons = {}
@@ -176,57 +169,51 @@ class SourceDialog:
             except Exception:
                 pass
             self.sklad_buttons[name] = btn
-        # подсказка под складом — компактнее
         tk.Label(card, text="Файл попадёт в папку «склад / поставщик / дата.xlsx»", background=CARD, foreground=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 6))
 
-        # заголовок поставщиков + поиск (1.9.19)
-        ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", **pad)
-        # строка поиска поставщика
-        search_frame = tk.Frame(self.win, background=BG)
-        search_frame.pack(fill="x", padx=20, pady=(6, 4))
-        try:
-            tk.Label(search_frame, text="\U0001F50D", background=BG, foreground=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
-            self.supplier_search_var = tk.StringVar()
-            self.supplier_search_entry = ttk.Entry(search_frame, textvariable=self.supplier_search_var, style="Pick.Search.TEntry", font=("Segoe UI", 9))
-            self.supplier_search_entry.pack(side="left", fill="x", expand=True)
-            self.supplier_search_var.trace_add("write", lambda *_: self._on_supplier_search())
-            # placeholder
-            try:
-                self.supplier_search_entry.insert(0, "Поиск поставщика…")
-                self.supplier_search_entry.bind("<FocusIn>", self._on_search_focus_in)
-                self.supplier_search_entry.bind("<FocusOut>", self._on_search_focus_out)
-            except Exception:
-                pass
-        except Exception:
-            self.supplier_search_var = None  # type: ignore
-
+        # ----- низ окна: кнопки всегда видимы (pack side=bottom ПОСЛЕ списка нельзя — перекроют)
+        # Поэтому кнопки пакуем ДО списка, но side=bottom гарантирует что они внизу.
+        # Однако canvas с фиксированной высотой ломает это — убираем фиксированную высоту.
         buttons = ttk.Frame(self.win, style="Pick.TFrame")
-        buttons.pack(side="bottom", fill="x", pady=(12, 16), **pad)
+        buttons.pack(side="bottom", fill="x", pady=(10, 12), **pad)
         self.ok_btn = ttk.Button(buttons, text="✓  Продолжить", style="PickPrimary.TButton", command=self.on_ok)
         self.ok_btn.pack(side="right")
         self.cancel_btn = ttk.Button(buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel)
         self.cancel_btn.pack(side="right", padx=(0, 10))
-
-        # информацию над кнопкой Продолжить убрали (требование 1.9.19) — hint больше не показываем
         self.hint_label = None
-        # для тестов оставляем совместимость: если кто-то обратится к hint_label — вернём dummy
-        try:
-            self._hint_value = self._hint()
-        except Exception:
-            self._hint_value = ""
+        self._hint_value = self._hint()
 
-        # список поставщиков — на всю высоту экрана (требование 1.9.18/1.9.19) строго по экрану
+        # заголовок поставщиков + поиск как в Excel (1.9.20)
+        ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", side="top", **pad)
+        search_frame = tk.Frame(self.win, background=BG)
+        search_frame.pack(fill="x", side="top", padx=20, pady=(6, 4))
+        # поле поиска — как в Excel: иконка, placeholder, мгновенный фильтр
+        self.supplier_search_var = tk.StringVar()
+        try:
+            tk.Label(search_frame, text="\U0001F50D", background=BG, foreground=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+            self.supplier_search_entry = ttk.Entry(search_frame, textvariable=self.supplier_search_var, style="Pick.Search.TEntry", font=("Segoe UI", 9))
+            self.supplier_search_entry.pack(side="left", fill="x", expand=True)
+            # счётчик как в Excel: показано X из Y
+            self.search_count_label = tk.Label(search_frame, text="", background=BG, foreground=MUTED, font=("Segoe UI", 8))
+            self.search_count_label.pack(side="right", padx=(8, 0))
+            # placeholder
+            self._search_placeholder = "Поиск поставщика…"
+            self._search_has_placeholder = True
+            self.supplier_search_entry.insert(0, self._search_placeholder)
+            self.supplier_search_entry.configure(foreground=MUTED)
+            self.supplier_search_entry.bind("<FocusIn>", self._on_search_focus_in)
+            self.supplier_search_entry.bind("<FocusOut>", self._on_search_focus_out)
+            self.supplier_search_entry.bind("<KeyRelease>", self._on_supplier_key)
+            self.supplier_search_entry.bind("<Escape>", self._on_search_escape)
+        except Exception:
+            self.supplier_search_var = tk.StringVar()  # type: ignore
+
+        # список поставщиков — растягивается на всё оставшееся место, без фиксированной высоты
         list_frame = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
-        list_frame.pack(fill="both", expand=True, padx=16, pady=(4, 8))
+        list_frame.pack(fill="both", expand=True, side="top", padx=16, pady=(4, 6))
 
-        # высота по экрану — строго
-        try:
-            screen_h = self.win.winfo_screenheight()
-            # вычитаем фиксированные элементы: header 56 + card ~90 + поиск ~40 + кнопки 60 + отступы
-            canvas_h = max(300, screen_h - 220) if screen_h else 600
-        except Exception:
-            canvas_h = 600
-        canvas = tk.Canvas(list_frame, height=canvas_h, highlightthickness=0, background=CARD)
+        # Canvas БЕЗ фиксированной высоты — пусть pack expand сам растянет
+        canvas = tk.Canvas(list_frame, highlightthickness=0, background=CARD)
         vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas, style="Pick.TFrame")
         inner.bind(
@@ -240,11 +227,10 @@ class SourceDialog:
         self._supplier_canvas = canvas
         self._supplier_inner = inner
 
-        # без пункта «как в документе» — только реальные поставщики по алфавиту, шрифт крупнее (1.9.19)
+        # поставщики — крупный шрифт за счёт плотности (pady 1)
         initial_set = {
             s.strip() for s in (self.supplier_var.get() or "").split(",") if s.strip()
         }
-
         self.supplier_vars: dict[str, tk.BooleanVar] = {}
         self.supplier_checks: dict[str, ttk.Checkbutton] = {}
         for name in self.suppliers:
@@ -256,18 +242,21 @@ class SourceDialog:
                 variable=var,
                 style="Supplier.TCheckbutton",
             )
-            # увеличили шрифт за счёт свободного пространства между ними — pady уменьшили
             cb.pack(anchor="w", padx=8, pady=1, fill="x")
             self.supplier_vars[name] = var
             self.supplier_checks[name] = cb
         if not self.suppliers:
             ttk.Label(inner, text="Загрузите ведомость — здесь появятся поставщики", style="PickHint.TLabel").pack(anchor="w", padx=8, pady=6)
 
-        # подсказка внизу не нужна — убрана, но для совместимости оставили _hint()
+        # обновить счётчик
+        self._update_search_count(len(self.suppliers), len(self.suppliers))
 
     def _on_search_focus_in(self, _event=None) -> None:
         try:
-            if self.supplier_search_var.get() == "Поиск поставщика…":
+            if getattr(self, "_search_has_placeholder", False):
+                self.supplier_search_entry.delete(0, "end")
+                self.supplier_search_entry.configure(foreground=TEXT)
+                self._search_has_placeholder = False
                 self.supplier_search_var.set("")
         except Exception:
             pass
@@ -275,32 +264,73 @@ class SourceDialog:
     def _on_search_focus_out(self, _event=None) -> None:
         try:
             if not self.supplier_search_var.get().strip():
-                self.supplier_search_var.set("Поиск поставщика…")
+                self.supplier_search_entry.delete(0, "end")
+                self.supplier_search_entry.insert(0, self._search_placeholder)
+                self.supplier_search_entry.configure(foreground=MUTED)
+                self._search_has_placeholder = True
         except Exception:
             pass
 
-    def _on_supplier_search(self, *_args) -> None:
-        """Фильтр списка поставщиков по строке поиска."""
-        if not hasattr(self, "supplier_search_var") or self.supplier_search_var is None:
-            return
+    def _on_search_escape(self, _event=None) -> None:
         try:
-            raw = self.supplier_search_var.get()
-            if raw == "Поиск поставщика…":
-                raw = ""
-            q = raw.strip().lower()
+            self.supplier_search_var.set("")
+            self.supplier_search_entry.delete(0, "end")
+            self.supplier_search_entry.insert(0, self._search_placeholder)
+            self.supplier_search_entry.configure(foreground=MUTED)
+            self._search_has_placeholder = True
+            self._apply_supplier_filter("")
         except Exception:
-            return
+            pass
+        return "break"
+
+    def _on_supplier_key(self, _event=None) -> None:
+        # как в Excel — фильтр на каждый KeyRelease
+        try:
+            if getattr(self, "_search_has_placeholder", False):
+                return
+            q = self.supplier_search_var.get()
+            self._apply_supplier_filter(q)
+        except Exception:
+            pass
+
+    def _apply_supplier_filter(self, query: str) -> None:
+        q = (query or "").strip().lower()
+        # учитываем placeholder
+        if q == self._search_placeholder.lower():
+            q = ""
+        visible = 0
         for name, cb in self.supplier_checks.items():
+            show = not q or q in name.lower()
             try:
-                if not q or q in name.lower():
-                    # показать — если был скрыт
-                    if not cb.winfo_exists() or str(getattr(cb, "packed", True)) == "False":
-                        pass
+                if show:
                     cb.pack(anchor="w", padx=8, pady=1, fill="x")
+                    visible += 1
                 else:
                     cb.pack_forget()
             except Exception:
-                pass
+                # fake_tk has no pack_forget — просто считаем, без реального скрытия
+                if show:
+                    try:
+                        cb.pack(anchor="w", padx=8, pady=1, fill="x")
+                    except Exception:
+                        pass
+                    visible += 1
+        self._update_search_count(visible, len(self.supplier_checks))
+        # прокрутка в начало как в Excel
+        try:
+            self._supplier_canvas.yview_moveto(0)
+        except Exception:
+            pass
+
+    def _update_search_count(self, shown: int, total: int) -> None:
+        try:
+            if hasattr(self, "search_count_label"):
+                if shown == total:
+                    self.search_count_label.configure(text=f"{total}")
+                else:
+                    self.search_count_label.configure(text=f"{shown} из {total}")
+        except Exception:
+            pass
 
     def _select_sklad(self, name: str) -> None:
         """Наглядный выбор склада — подсветка активной кнопки."""
@@ -331,7 +361,6 @@ class SourceDialog:
 
     # ------------------------------------------------------------------ данные
     def _on_supplier_toggle(self, name: str) -> None:
-        # оставлено для совместимости, но «как в документе» убран
         pass
 
     @property
@@ -393,12 +422,7 @@ def install_styles(style) -> None:
 
 
 class _VedChooser:
-    """Выпадающий список номенклатуры под ячейкой «Из ведомости».
-
-    Обычное безрамочное окно поверх таблицы: щелчок по строке выбирает
-    номенклатуру, Esc или щелчок мимо — закрывает. Окно не «висит» на месте:
-    таблица закрывает его при прокрутке и при любом новом действии.
-    """
+    """Выпадающий список номенклатуры под ячейкой «Из ведомости»."""
 
     def __init__(self, app, x: int, y: int, width: int, items, on_pick) -> None:
         self.app = app
@@ -408,7 +432,6 @@ class _VedChooser:
         self.win = tk.Toplevel(app)
         try:
             self.win.overrideredirect(True)
-            # тень/граница для современного вида
             self.win.configure(background=BORDER, bd=1, relief="solid")
         except Exception:  # noqa: BLE001 - не критично
             pass
@@ -416,7 +439,7 @@ class _VedChooser:
             self.win.configure(background=CARD)
         except Exception:  # noqa: BLE001 - не критично
             pass
-        # на всю высоту экрана (требование 1.9.18/1.9.19) — строго
+        # на всю высоту экрана — строго
         try:
             screen_h = app.winfo_screenheight() if hasattr(app, "winfo_screenheight") else 800
             max_h = max(400, screen_h - y - 40) if screen_h else 600
@@ -429,7 +452,6 @@ class _VedChooser:
         except Exception:  # noqa: BLE001 - не критично
             pass
 
-        # поиск внутри выпадающего списка — современный дизайн
         try:
             search_row = tk.Frame(self.win, background="#F8FAFC", highlightbackground=BORDER, highlightthickness=1)
             search_row.pack(fill="x", padx=8, pady=(8, 6))
@@ -479,7 +501,6 @@ class _VedChooser:
         except Exception:  # noqa: BLE001 - не критично
             pass
 
-    # ------------------------------------------------------------------ события
     def _on_click(self, _event=None):
         self._pick_current()
         return "break"
@@ -517,7 +538,6 @@ class _VedChooser:
         if self.on_pick is not None:
             self.on_pick(value)
 
-    # ------------------------------------------------------------------ данные
     def labels(self) -> List[str]:
         return [label for label, _value in self.items]
 
