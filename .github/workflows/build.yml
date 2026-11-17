@@ -64,7 +64,7 @@ jobs:
       - name: Собрать оконную версию (Konvektor.exe)
         shell: pwsh
         run: >
-          pyinstaller --noconfirm --onedir --noconsole --noupx
+          pyinstaller --noconfirm --onefile --noconsole --noupx
           --name Konvektor
           --icon assets/konvektor.ico
           --add-data "assets/konvektor_icon.png;assets"
@@ -83,14 +83,14 @@ jobs:
         run: |
           .\dist\Konvektor-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
-          if (-not (Test-Path .\dist\Konvektor\Konvektor.exe)) { throw "Konvektor.exe не собран" }
-          Get-Item .\dist\Konvektor\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
+          if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
+          Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
 
       - name: Упаковать в ZIP
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item -Recurse -Force dist\Konvektor package\Konvektor
+          Copy-Item -Force dist\Konvektor.exe package\
           Copy-Item -Force dist\Konvektor-cli.exe package\
           if (Test-Path README.md) { Copy-Item -Force README.md package\README.md }
           Compress-Archive -Path package\* -DestinationPath Konvektor-windows.zip -Force
