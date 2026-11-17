@@ -51,6 +51,7 @@ from .pick import (
     install_styles,
 )
 from .writer import plain_number
+from . import settings as app_settings
 
 try:  # pragma: no cover - зависит от сборки Python
     import tkinter as tk
@@ -138,17 +139,24 @@ PREVIEW_LIMIT = 500
 _NO_OVERRIDE = object()
 
 #: Оформление окна: спокойный светлый фон, тёмная шапка, один акцент.
-NAVY = "#1F3A5F"
-NAVY_LIGHT = "#2A4C77"
-BG = "#F4F6FA"
+#: Обновлённая палитра 1.9.17 — чуть светлее, мягче контраст, современный вид
+NAVY = "#1E3A5F"
+NAVY_LIGHT = "#2B4C7A"
+NAVY_HOVER = "#264A7A"
+BG = "#F2F6FC"
+BG_SOFT = "#EAF0FA"
 CARD = "#FFFFFF"
-BORDER = "#D8E0EC"
-TEXT = "#1B2733"
-MUTED = "#5B6B7F"
-ACCENT = "#2F6FED"
-ACCENT_DARK = "#1F55C0"
-OK_GREEN = "#1E8E5A"
-ROW_ODD = "#F7F9FC"
+BORDER = "#D4DFEE"
+BORDER_LIGHT = "#E6EDF7"
+TEXT = "#1A2B42"
+MUTED = "#64748B"
+ACCENT = "#2563EB"
+ACCENT_HOVER = "#1D4ED8"
+ACCENT_DARK = "#1E3A8A"
+OK_GREEN = "#059669"
+OK_GREEN_LIGHT = "#ECFDF5"
+ROW_ODD = "#F8FAFC"
+ROW_HOVER = "#EFF6FF"
 
 
 class KonvektorApp(_Base):
@@ -195,13 +203,18 @@ class KonvektorApp(_Base):
         self._editor = None
         self._edit_var = None
         self._editing: Optional[str] = None
+        # сохранение полей таблицы
+        self._saved_fields: dict = {}
+        self._column_widths_override: dict = {}
 
         self._set_window_icon()
         self._build_ui()
+        self._restore_settings()
         if initial_files:
             self._add_files(initial_files)
         self._maximize()
         self.after(120, self._poll_queue)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------ UI
     def _set_window_icon(self) -> None:
@@ -300,7 +313,19 @@ class KonvektorApp(_Base):
         open_menu.add_command(label="Открыть файл", command=self.on_open_result, state="disabled")
         open_menu.add_command(label="Открыть папку", command=self.on_open_folder, state="disabled")
         open_mb["menu"] = open_menu
-        open_mb.pack(side="left")
+        open_mb.pack(side="left", padx=(0, 6))
+
+        # 5. Меню «Таблица ▾» — сохранение полей таблицы
+        table_mb = ttk.Menubutton(nav, text="Таблица ▾", style="Header.TMenubutton")
+        table_menu = tk.Menu(table_mb, tearoff=0)
+        table_menu.add_command(label="Сохранить поля таблицы", command=self.on_save_table_fields)
+        table_menu.add_command(label="Загрузить поля таблицы", command=self.on_load_table_fields)
+        table_menu.add_separator()
+        table_menu.add_command(label="Сбросить ширину колонок", command=self.on_reset_column_widths)
+        table_menu.add_command(label="Сохранить настройки", command=self.on_save_settings)
+        table_mb["menu"] = table_menu
+        table_mb.pack(side="left")
+        self.table_mb = table_mb
 
         class _MenuItemProxy:
             def __init__(self, menu: tk.Menu, index: int) -> None:
@@ -507,7 +532,7 @@ class KonvektorApp(_Base):
                 foreground=NAVY,
                 bordercolor=BORDER,
             )
-            style.map("Compact.TButton", background=[("active", "#E8EEF8")])
+            style.map("Compact.TButton", background=[("active", BG_SOFT), ("pressed", BORDER)])
             style.configure(
                 "Small.TLabel", background=CARD, foreground=TEXT, font=("Segoe UI", 9)
             )
@@ -516,6 +541,12 @@ class KonvektorApp(_Base):
             )
             style.configure("Path.TEntry", padding=(6, 5), fieldbackground=CARD)
             style.configure("TSeparator", background=BORDER)
+            style.configure("Header.TMenubutton", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 9, "bold"), padding=(12, 6))
+            style.map("Header.TMenubutton", background=[("active", NAVY_HOVER), ("pressed", NAVY_LIGHT)])
+            style.configure("HeaderPrimary.TMenubutton", background=ACCENT, foreground="#FFFFFF", font=("Segoe UI", 9, "bold"), padding=(14, 7))
+            style.map("HeaderPrimary.TMenubutton", background=[("active", ACCENT_HOVER), ("pressed", ACCENT_DARK)])
+            style.configure("Secondary.TButton", background=CARD, foreground=NAVY, font=("Segoe UI", 9), padding=(12, 5), bordercolor=BORDER)
+            style.map("Secondary.TButton", background=[("active", BG_SOFT), ("pressed", BORDER_LIGHT)], foreground=[("disabled", MUTED)])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
             pass
 
@@ -525,14 +556,14 @@ class KonvektorApp(_Base):
             style = ttk.Style(self)
             style.configure(
                 "Grid.Treeview",
-                background="#FFFFFF",
-                fieldbackground="#FFFFFF",
-                foreground="#000000",
-                rowheight=23,
+                background=CARD,
+                fieldbackground=CARD,
+                foreground=TEXT,
+                rowheight=24,
                 borderwidth=1,
-                bordercolor=GRID_COLOR,
-                lightcolor=GRID_COLOR,
-                darkcolor=GRID_COLOR,
+                bordercolor=BORDER,
+                lightcolor=BORDER,
+                darkcolor=BORDER,
                 relief="solid",
                 font=("Segoe UI", 9),
             )
@@ -543,17 +574,139 @@ class KonvektorApp(_Base):
             )
             style.configure(
                 "Grid.Treeview.Heading",
-                background="#DCE6F1",
-                foreground="#1F4E78",
+                background=BG_SOFT,
+                foreground=NAVY,
                 relief="raised",
                 borderwidth=1,
-                padding=(2, 3),
-                # 8 пт: узкие числовые колонки подписываются без обрезки
+                padding=(4, 6),
                 font=("Segoe UI", 8, "bold"),
             )
-            style.map("Grid.Treeview.Heading", background=[("active", "#CFE0F5")])
-            style.map("Grid.Treeview", background=[("selected", "#BBDEFB")])
+            style.map("Grid.Treeview.Heading", background=[("active", BORDER_LIGHT)])
+            style.map("Grid.Treeview", background=[("selected", ROW_HOVER)], foreground=[("selected", NAVY)])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
+            pass
+
+    # ------------------------------------------------- сохранение полей таблицы
+    def _save_table_fields(self) -> dict:
+        """Собрать текущие поля таблицы для сохранения."""
+        fields = {
+            "columns": list(self.preview.columns_list) if hasattr(self.preview, "columns_list") else PREVIEW_COLUMNS,
+            "widths": {},
+            "displaycolumns": list(self.preview.cget("displaycolumns")) if hasattr(self.preview, "cget") else [],
+        }
+        try:
+            for col in PREVIEW_COLUMNS:
+                try:
+                    w = self.preview.column(col, "width")
+                    fields["widths"][col] = int(w) if str(w).isdigit() else w
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        fields["sklad"] = self._sklad
+        fields["supplier"] = self._supplier_choice
+        fields["output_dir"] = self.out_var.get()
+        fields["ved_path"] = self._ved_path
+        return fields
+
+    def on_save_table_fields(self) -> None:
+        """Сохранить поля таблицы в настройки."""
+        try:
+            fields = self._save_table_fields()
+            data = app_settings.load_settings()
+            data["table_fields"] = fields
+            data["column_widths"] = fields["widths"]
+            data["sklad"] = self._sklad
+            data["supplier"] = self._supplier_choice
+            data["output_dir"] = self.out_var.get()
+            app_settings.save_settings(data)
+            self.hint_var.set("Поля таблицы сохранены ✓")
+            try:
+                from tkinter import messagebox
+                messagebox.showinfo(APP_NAME, "Поля таблицы сохранены.\nОни восстановятся при следующем запуске.")
+            except Exception:
+                pass
+        except Exception as e:
+            self.hint_var.set(f"Не удалось сохранить: {e}")
+
+    def on_load_table_fields(self) -> None:
+        """Загрузить сохранённые поля таблицы."""
+        try:
+            data = app_settings.load_settings()
+            fields = data.get("table_fields") or {}
+            widths = data.get("column_widths") or fields.get("widths") or {}
+            if widths:
+                for col, w in widths.items():
+                    try:
+                        self.preview.column(col, width=int(w))
+                    except Exception:
+                        pass
+                self.hint_var.set("Поля таблицы загружены ✓")
+            else:
+                self.hint_var.set("Сохранённых полей нет")
+        except Exception as e:
+            self.hint_var.set(f"Не удалось загрузить: {e}")
+
+    def on_reset_column_widths(self) -> None:
+        for col, w in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS):
+            try:
+                self.preview.column(col, width=w)
+            except Exception:
+                pass
+        self.hint_var.set("Ширина колонок сброшена")
+
+    def on_save_settings(self) -> None:
+        self.on_save_table_fields()
+
+    def _restore_settings(self) -> None:
+        """Восстановить настройки при запуске."""
+        try:
+            data = app_settings.load_settings()
+            if data.get("output_dir"):
+                self.out_var.set(data["output_dir"])
+            if data.get("sklad"):
+                self._sklad = data["sklad"]
+            if data.get("supplier"):
+                self._supplier_choice = data["supplier"]
+                self.source_var.set(self.source_text())
+            widths = data.get("column_widths") or {}
+            if widths:
+                for col, w in widths.items():
+                    try:
+                        self.preview.column(col, width=int(w))
+                    except Exception:
+                        pass
+            geom = data.get("window_geometry")
+            if geom:
+                try:
+                    self.geometry(geom)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        try:
+            data = app_settings.load_settings()
+            data["window_geometry"] = self.geometry()
+            data["output_dir"] = self.out_var.get()
+            data["sklad"] = self._sklad
+            data["supplier"] = self._supplier_choice
+            # сохранить ширины колонок
+            widths = {}
+            for col in PREVIEW_COLUMNS:
+                try:
+                    widths[col] = self.preview.column(col, "width")
+                except Exception:
+                    pass
+            data["column_widths"] = widths
+            data["table_fields"] = self._save_table_fields()
+            app_settings.save_settings(data)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
             pass
 
     # ------------------------------------------------------------- действия
