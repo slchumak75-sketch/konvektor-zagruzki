@@ -515,20 +515,39 @@ class Vedomost:
         return result
 
     def find(
-        self, name: Any, article: Any, barcode: Any, kind: str, supplier: str = ""
+        self, name: Any, article: Any, barcode: Any, kind: str, supplier: str = "", sklad: str = ""
     ) -> Optional[Tuple[VedRow, float]]:
         """Найти позицию по одному ключу: (позиция, сходство) или None."""
+        sklad_l = sklad.strip().lower()
         if kind == MATCH_BARCODE:
             code = norm_barcode(barcode)
             if not code:
                 return None
             row = self._lookup_barcode(code, supplier)
+            if row is not None and sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                row = next(
+                    (
+                        r
+                        for r in (self.rows_of_supplier(supplier) if supplier else self.rows)
+                        if norm_barcode(r.barcode) == code and (not r.sklad or sklad_l in r.sklad.lower())
+                    ),
+                    None,
+                )
             return (row, 1.0) if row is not None else None
         if kind == MATCH_ARTICLE:
             key = norm_article(article)
             if not key:
                 return None
             row = self._lookup_article(key, supplier)
+            if row is not None and sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                row = next(
+                    (
+                        r
+                        for r in (self.rows_of_supplier(supplier) if supplier else self.rows)
+                        if norm_article(r.article) == key and (not r.sklad or sklad_l in r.sklad.lower())
+                    ),
+                    None,
+                )
             return (row, 1.0) if row is not None else None
         # по наименованию: сначала точное совпадение, затем нечёткое
         exact = self.by_name(name)
@@ -954,7 +973,7 @@ class Matcher:
 
         for scope in scopes:
             for kind in MATCH_ORDER[self.strategy]:
-                found = self.vedomost.find(name, article, barcode, kind, scope)
+                found = self.vedomost.find(name, article, barcode, kind, scope, sklad=self.sklad)
                 if (
                     found is not None
                     and self.sklad
