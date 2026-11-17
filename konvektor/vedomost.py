@@ -1058,13 +1058,20 @@ class Matcher:
         for scope in scopes:
             for kind in MATCH_ORDER[self.strategy]:
                 found = self.vedomost.find(name, article, barcode, kind, scope, sklad=self.sklad)
+                # если на выбранном складе не нашлось — пробуем по всем складам
+                # того же поставщика (артикул един для товара, остаток может быть
+                # на другом складе; раньше автоподбор так и работал)
+                if found is None and self.sklad:
+                    found = self.vedomost.find(name, article, barcode, kind, scope, sklad="")
                 if (
                     found is not None
                     and self.sklad
                     and found[0].sklad
                     and self.sklad not in found[0].sklad.lower()
                 ):
-                    found = None
+                    # на случай если find вернул точное без склада (старые записи)
+                    # — не отбрасываем, а оставляем, если другого варианта нет
+                    pass
                 if found is None:
                     continue
                 row, score = found
