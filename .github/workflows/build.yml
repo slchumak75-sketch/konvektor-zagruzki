@@ -64,7 +64,7 @@ jobs:
       - name: Собрать оконную версию (Konvektor.exe)
         shell: pwsh
         run: >
-          pyinstaller --noconfirm --onefile --noconsole --noupx
+          pyinstaller --noconfirm --onedir --noconsole --noupx
           --name Konvektor
           --icon assets/konvektor.ico
           --add-data "assets/konvektor_icon.png;assets"
