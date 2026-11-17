@@ -1378,15 +1378,7 @@ class KonvektorApp(_Base):
         supplier = ""
         if self._matcher is not None:
             supplier = str(self._matcher.summary.get("supplier_key") or "")
-        rows = self._vedomost.candidates(entry.doc_name, supplier, limit=30)
-        sklad = (self._sklad or "").strip().lower()
-        if sklad:
-            rows = [
-                (score, r)
-                for score, r in rows
-                if not r.sklad or sklad in r.sklad.lower()
-            ]
-        return rows[:10]
+        return self._vedomost.candidates(entry.doc_name, supplier, limit=10, sklad=self._sklad)
 
     def _current_from_ved(self, stored: dict) -> str:
         entry = self._entry_for(stored["key"])
