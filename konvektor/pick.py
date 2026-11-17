@@ -68,10 +68,10 @@ class SourceDialog:
             screen_h = self.win.winfo_screenheight()
             screen_w = self.win.winfo_screenwidth()
             if screen_h and screen_h > 200:
-                # строго по высоте экрана — как таблица, оставляем место под панель задач
-                full_h = max(520, screen_h - 60)
+                # строго по высоте экрана — как таблица, оставляем запас под панель задач и приподнимаем низ
+                full_h = max(520, screen_h - 80)
                 x = max(0, (screen_w - 640) // 2) if screen_w else 100
-                y = 20
+                y = 10
                 self.win.geometry(f"640x{full_h}+{x}+{y}")
                 self._locked_x = x
                 self._locked_y = y
