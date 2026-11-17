@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 import traceback
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import APP_NAME, __version__
 from .extract import Item
@@ -1372,13 +1372,50 @@ class KonvektorApp(_Base):
                 pass
 
     def _suggestions(self, entry):
-        """Похожие номенклатуры ведомости — подсказкой в выпадающем списке."""
+        """Похожие номенклатуры ведомости — подсказкой в выпадающем списке.
+
+        Показывает только номенклатуру того склада, куда загружается документ,
+        и только выбранного поставщика(ов) — как просил заказчик: «при выборе
+        птичкой иной номенклатуры должна отображаться номенклатура только этого
+        склада куда был загружен счет и этого поставщика».
+        """
         if self._vedomost is None:
             return []
-        supplier = ""
+        # поставщик(и) — из сводки Matcher (может быть несколько)
+        suppliers: List[str] = []
         if self._matcher is not None:
-            supplier = str(self._matcher.summary.get("supplier_key") or "")
-        return self._vedomost.candidates(entry.doc_name, supplier, limit=10, sklad=self._sklad)
+            keys = self._matcher.summary.get("supplier_keys") or []
+            if keys:
+                suppliers = [str(k) for k in keys if k]
+            else:
+                single = self._matcher.summary.get("supplier_key") or ""
+                if single:
+                    suppliers = [str(single)]
+        if not suppliers:
+            return self._vedomost.candidates(entry.doc_name, "", limit=10, sklad=self._sklad)
+        # несколько поставщиков — объединяем результаты и сортируем по сходству
+        seen: dict = {}
+        merged: List[Tuple[float, object]] = []
+        for sup in suppliers:
+            for score, row in self._vedomost.candidates(entry.doc_name, sup, limit=10, sklad=self._sklad):
+                key = (row.nomenclature, row.article)
+                if key in seen and seen[key] >= score:
+                    continue
+                seen[key] = score
+                merged.append((score, row))
+        merged.sort(key=lambda pair: (-pair[0], pair[1].nomenclature.lower()))
+        # дедупликация как в candidates уже частично сделана, но нужна и здесь
+        unique: List[Tuple[float, object]] = []
+        seen_norm = set()
+        for score, row in merged:
+            k = (self._vedomost._norm_names[row.index] if hasattr(row, "index") else row.nomenclature.lower(), row.article)
+            if k in seen_norm:
+                continue
+            seen_norm.add(k)
+            unique.append((score, row))
+            if len(unique) >= 10:
+                break
+        return unique
 
     def _current_from_ved(self, stored: dict) -> str:
         entry = self._entry_for(stored["key"])
@@ -1445,18 +1482,36 @@ class KonvektorApp(_Base):
         )
 
     def _find_ved_row(self, entry, text: str):
-        """Найти номенклатуру ведомости по вписанному названию (если есть)."""
+        """Найти номенклатуру ведомости по вписанному названию (если есть).
+
+        Фильтрует по складу и поставщику — чтобы свободный ввод не
+        подставил товар чужого склада (см. требование заказчика). Если
+        выбрано несколько поставщиков — ищет среди всех выбранных.
+        """
         if self._vedomost is None:
             return None
-        exact = self._vedomost.by_name(text)
-        if exact is not None:
-            return exact
-        supplier = ""
+        suppliers: List[str] = []
         if self._matcher is not None:
-            supplier = str(self._matcher.summary.get("supplier_key") or "")
-        found = self._vedomost.candidates(text, supplier, limit=1)
-        if found and found[0][0] >= AUTO_SCORE:
-            return found[0][1]
+            keys = self._matcher.summary.get("supplier_keys") or []
+            if keys:
+                suppliers = [str(k) for k in keys if k]
+            else:
+                single = self._matcher.summary.get("supplier_key") or ""
+                if single:
+                    suppliers = [str(single)]
+        # точное совпадение — с проверкой склада и поставщика
+        exact = self._vedomost.by_name(text)
+        if exact is not None and self._vedomost._sklad_ok(exact.sklad, self._sklad):
+            if not suppliers or exact.supplier_key in suppliers:
+                return exact
+        # нечёткий поиск среди нужных поставщиков и склада
+        for sup in (suppliers or [""]):
+            found = self._vedomost.candidates(text, sup, limit=1, sklad=self._sklad)
+            if found and found[0][0] >= AUTO_SCORE:
+                return found[0][1]
+        # последняя попытка: точное без учёта склада
+        if exact is not None and (not suppliers or exact.supplier_key in suppliers):
+            return exact
         return None
 
     def _apply_edit_locally(self, stored: dict, entry) -> None:
