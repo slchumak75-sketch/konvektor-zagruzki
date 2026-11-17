@@ -1357,6 +1357,8 @@ class KonvektorApp(_Base):
             label = f"{score:.0%} · {row.nomenclature}"
             if row.article:
                 label += f" · арт. {row.article}"
+            if row.barcode:
+                label += f" · штрихкод {row.barcode}"
             items.append((label, row))
         items.append(("Своё название…", CHOICE_CUSTOM))
 
