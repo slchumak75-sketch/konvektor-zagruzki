@@ -116,15 +116,20 @@ class SourceDialog:
     # ------------------------------------------------------------------ вёрстка
     def _build(self) -> None:
         pad = {"padx": 20}
-        # заголовок
+        # Используем grid, чтобы кнопки внизу были ВСЕГДА видны независимо от высоты списка.
+        # Колонка 0 растягивается, строка со списком (row=4) растягивается.
+        self.win.columnconfigure(0, weight=1)
+        self.win.rowconfigure(4, weight=1)
+
+        # 0: заголовок
         header = tk.Frame(self.win, background=NAVY, height=56)
-        header.pack(fill="x", side="top")
-        header.pack_propagate(False)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
         tk.Label(header, text="  \U0001F4E6  Склад и поставщик", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="both", expand=True, padx=14, pady=10)
 
-        # карточка склада — поуже по высоте (1.9.19/1.9.20)
+        # 1: карточка склада — поуже по высоте
         card = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
-        card.pack(fill="x", side="top", padx=16, pady=(14, 8))
+        card.grid(row=1, column=0, sticky="ew", padx=16, pady=(14, 8))
         tk.Label(card, text="Выберите склад — куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(8, 2))
         sklad_row = tk.Frame(card, background=CARD)
         sklad_row.pack(fill="x", padx=12, pady=(4, 8))
@@ -171,36 +176,27 @@ class SourceDialog:
             self.sklad_buttons[name] = btn
         tk.Label(card, text="Файл попадёт в папку «склад / поставщик / дата.xlsx»", background=CARD, foreground=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 6))
 
-        # ----- низ окна: кнопки всегда видимы (pack side=bottom ПОСЛЕ списка нельзя — перекроют)
-        # Поэтому кнопки пакуем ДО списка, но side=bottom гарантирует что они внизу.
-        # Однако canvas с фиксированной высотой ломает это — убираем фиксированную высоту.
-        buttons = ttk.Frame(self.win, style="Pick.TFrame")
-        buttons.pack(side="bottom", fill="x", pady=(10, 12), **pad)
-        self.ok_btn = ttk.Button(buttons, text="✓  Продолжить", style="PickPrimary.TButton", command=self.on_ok)
-        self.ok_btn.pack(side="right")
-        self.cancel_btn = ttk.Button(buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel)
-        self.cancel_btn.pack(side="right", padx=(0, 10))
-        self.hint_label = None
-        self._hint_value = self._hint()
+        # 2: заголовок поставщиков
+        ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", **pad)
 
-        # заголовок поставщиков + поиск как в Excel (1.9.20)
-        ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", side="top", **pad)
+        # 3: поиск как в Excel
         search_frame = tk.Frame(self.win, background=BG)
-        search_frame.pack(fill="x", side="top", padx=20, pady=(6, 4))
-        # поле поиска — как в Excel: иконка, placeholder, мгновенный фильтр
+        search_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(6, 4))
+        search_frame.columnconfigure(1, weight=1)
         self.supplier_search_var = tk.StringVar()
         try:
-            tk.Label(search_frame, text="\U0001F50D", background=BG, foreground=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+            tk.Label(search_frame, text="\U0001F50D", background=BG, foreground=MUTED, font=("Segoe UI", 9)).grid(row=0, column=0, padx=(0, 6))
             self.supplier_search_entry = ttk.Entry(search_frame, textvariable=self.supplier_search_var, style="Pick.Search.TEntry", font=("Segoe UI", 9))
-            self.supplier_search_entry.pack(side="left", fill="x", expand=True)
-            # счётчик как в Excel: показано X из Y
+            self.supplier_search_entry.grid(row=0, column=1, sticky="ew")
             self.search_count_label = tk.Label(search_frame, text="", background=BG, foreground=MUTED, font=("Segoe UI", 8))
-            self.search_count_label.pack(side="right", padx=(8, 0))
-            # placeholder
+            self.search_count_label.grid(row=0, column=2, padx=(8, 0))
             self._search_placeholder = "Поиск поставщика…"
             self._search_has_placeholder = True
             self.supplier_search_entry.insert(0, self._search_placeholder)
-            self.supplier_search_entry.configure(foreground=MUTED)
+            try:
+                self.supplier_search_entry.configure(foreground=MUTED)
+            except Exception:
+                pass
             self.supplier_search_entry.bind("<FocusIn>", self._on_search_focus_in)
             self.supplier_search_entry.bind("<FocusOut>", self._on_search_focus_out)
             self.supplier_search_entry.bind("<KeyRelease>", self._on_supplier_key)
@@ -208,11 +204,12 @@ class SourceDialog:
         except Exception:
             self.supplier_search_var = tk.StringVar()  # type: ignore
 
-        # список поставщиков — растягивается на всё оставшееся место, без фиксированной высоты
+        # 4: список поставщиков — растягивается, без фиксированной высоты
         list_frame = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
-        list_frame.pack(fill="both", expand=True, side="top", padx=16, pady=(4, 6))
+        list_frame.grid(row=4, column=0, sticky="nsew", padx=16, pady=(4, 6))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
 
-        # Canvas БЕЗ фиксированной высоты — пусть pack expand сам растянет
         canvas = tk.Canvas(list_frame, highlightthickness=0, background=CARD)
         vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas, style="Pick.TFrame")
@@ -222,12 +219,11 @@ class SourceDialog:
         )
         canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=vscroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        vscroll.pack(side="right", fill="y")
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
         self._supplier_canvas = canvas
         self._supplier_inner = inner
 
-        # поставщики — крупный шрифт за счёт плотности (pady 1)
         initial_set = {
             s.strip() for s in (self.supplier_var.get() or "").split(",") if s.strip()
         }
@@ -247,9 +243,17 @@ class SourceDialog:
             self.supplier_checks[name] = cb
         if not self.suppliers:
             ttk.Label(inner, text="Загрузите ведомость — здесь появятся поставщики", style="PickHint.TLabel").pack(anchor="w", padx=8, pady=6)
-
-        # обновить счётчик
         self._update_search_count(len(self.suppliers), len(self.suppliers))
+
+        # 5: кнопки — ВСЕГДА внизу, видны (grid row=5 weight=0)
+        buttons = ttk.Frame(self.win, style="Pick.TFrame")
+        buttons.grid(row=5, column=0, sticky="ew", pady=(10, 12), padx=20)
+        self.ok_btn = ttk.Button(buttons, text="✓  Продолжить", style="PickPrimary.TButton", command=self.on_ok)
+        self.ok_btn.pack(side="right")
+        self.cancel_btn = ttk.Button(buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel)
+        self.cancel_btn.pack(side="right", padx=(0, 10))
+        self.hint_label = None
+        self._hint_value = self._hint()
 
     def _on_search_focus_in(self, _event=None) -> None:
         try:
