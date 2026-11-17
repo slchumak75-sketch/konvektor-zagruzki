@@ -3,7 +3,7 @@
 Заказчик просил: при загрузке файла программа спрашивает **склад**
 («Мир» или «Кореличи») и даёт выбрать **поставщика** из тех, что есть в
 загруженной ведомости. Склад и поставщик задают папку результата
-(`<папка>/<склад>/<поставщик>/<дата>.xlsx`) и то, среди чьих позиций искать
+(``<папка>/<склад>/<поставщик>/<дата>.xlsx``) и то, среди чьих позиций искать
 номенклатуру в ведомости.
 """
 
@@ -23,7 +23,8 @@ except Exception:  # noqa: BLE001 - без tkinter диалог не нужен
 
 #: Склады заказчика.
 SKLADS = ("Мир", "Кореличи")
-#: Пункт списка поставщиков: не выбирать, взять поставщика из документа.
+#: Пункт «как в документе» убран по просьбе заказчика (1.9.18) — остаётся
+#: константой для совместимости, но в диалоге не показывается.
 DOC_SUPPLIER = "— как в документе —"
 
 BG = "#F2F6FC"
@@ -67,36 +68,80 @@ class SourceDialog:
                 pass
             screen_h = self.win.winfo_screenheight()
             if screen_h and screen_h > 200:
-                self.win.geometry(f"620x460+120+40")
+                full_h = max(520, screen_h - 60)
+                self.win.geometry(f"640x{full_h}+100+20")
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
 
         self.sklad_var = tk.StringVar(value=sklad or SKLADS[0])
-        self.supplier_var = tk.StringVar(value=supplier or DOC_SUPPLIER)
+        # поставщики сортируются по алфавиту (требование 1.9.18)
+        self.suppliers = sorted(self.suppliers, key=str.casefold)
+        self.supplier_var = tk.StringVar(value=supplier or "")
         self._build()
 
     # ------------------------------------------------------------------ вёрстка
     def _build(self) -> None:
         pad = {"padx": 20}
         # заголовок-карточка
-        header = tk.Frame(self.win, background=NAVY, height=52)
+        header = tk.Frame(self.win, background=NAVY, height=56)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, text="  \U0001F4E6  Склад и поставщик", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="both", expand=True, padx=12)
+        tk.Label(header, text="  \U0001F4E6  Склад и поставщик", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="both", expand=True, padx=14, pady=10)
 
+        # карточка склада — наглядный выбор (крупные кнопки с иконками)
         card = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
-        card.pack(fill="x", padx=16, pady=(14, 8))
-        tk.Label(card, text="Куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(10, 4))
-        sklad_row = ttk.Frame(card, style="Pick.TFrame")
-        sklad_row.pack(fill="x", padx=14, pady=(4, 10))
-        ttk.Label(sklad_row, text="Склад:", style="Pick.TLabel").pack(side="left")
+        card.pack(fill="x", padx=16, pady=(14, 10))
+        tk.Label(card, text="Выберите склад — куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(10, 6))
+        sklad_row = tk.Frame(card, background=CARD)
+        sklad_row.pack(fill="x", padx=12, pady=(6, 12))
         self.sklad_buttons = {}
         for name in SKLADS:
-            button = ttk.Radiobutton(sklad_row, text=name, value=name, variable=self.sklad_var)
-            button.pack(side="left", padx=(16, 0))
-            self.sklad_buttons[name] = button
+            icon = "\U0001F3E2" if name == "Мир" else "\U0001F3ED"
+            is_selected = self.sklad_var.get() == name
+            # Пытаемся сделать настоящую tk.Button с подсветкой ACCENT (красиво в реальном окне).
+            # В тестах (fake_tk) tk.Button отсутствует — откатываемся к ttk.
+            btn = None
+            try:
+                ButtonCls = getattr(tk, "Button", None)
+                if ButtonCls is not None:
+                    btn = ButtonCls(
+                        sklad_row,
+                        text=f"{icon}  {name}",
+                        font=("Segoe UI", 11, "bold" if is_selected else "normal"),
+                        background=ACCENT if is_selected else CARD,
+                        foreground="#FFFFFF" if is_selected else NAVY,
+                        activebackground=ACCENT_HOVER if is_selected else BG_SOFT,
+                        relief="flat" if is_selected else "solid",
+                        bd=1,
+                        highlightbackground=BORDER,
+                        padx=20,
+                        pady=10,
+                        cursor="hand2",
+                        command=lambda n=name: self._select_sklad(n),
+                    )
+                else:
+                    raise AttributeError("no tk.Button")
+            except Exception:
+                # fallback для fake_tk / окружений без tk.Button
+                try:
+                    btn = ttk.Radiobutton(
+                        sklad_row,
+                        text=f"{icon}  {name}",
+                        value=name,
+                        variable=self.sklad_var,
+                        style="Sklad.TRadiobutton",
+                    )
+                except Exception:
+                    btn = tk.Frame(sklad_row)  # type: ignore
+            try:
+                btn.pack(side="left", padx=8, expand=True, fill="x", ipady=6)
+            except Exception:
+                pass
+            self.sklad_buttons[name] = btn
+        # подсказка под складом
+        tk.Label(card, text="Файл попадёт в папку «склад / поставщик / дата.xlsx»", background=CARD, foreground=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 10))
 
-        ttk.Label(self.win, text="  Поставщик:", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", **pad)
+        ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", **pad)
         buttons = ttk.Frame(self.win, style="Pick.TFrame")
         buttons.pack(side="bottom", fill="x", pady=(12, 16), **pad)
         self.ok_btn = ttk.Button(buttons, text="✓  Продолжить", style="PickPrimary.TButton", command=self.on_ok)
@@ -107,10 +152,17 @@ class SourceDialog:
         self.hint_label = ttk.Label(self.win, text=self._hint(), style="PickHint.TLabel", wraplength=540, justify="left")
         self.hint_label.pack(side="bottom", anchor="w", **pad)
 
+        # список поставщиков — на всю высоту экрана (требование 1.9.18)
         list_frame = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
         list_frame.pack(fill="both", expand=True, padx=16, pady=(6, 8))
 
-        canvas = tk.Canvas(list_frame, height=180, highlightthickness=0, background=CARD)
+        # высота по экрану
+        try:
+            screen_h = self.win.winfo_screenheight()
+            canvas_h = max(300, screen_h - 260) if screen_h else 400
+        except Exception:
+            canvas_h = 400
+        canvas = tk.Canvas(list_frame, height=canvas_h, highlightthickness=0, background=CARD)
         vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas, style="Pick.TFrame")
         inner.bind(
@@ -122,59 +174,72 @@ class SourceDialog:
         canvas.pack(side="left", fill="both", expand=True)
         vscroll.pack(side="right", fill="y")
 
+        # без пункта «как в документе» — только реальные поставщики по алфавиту
         initial_set = {
             s.strip() for s in (self.supplier_var.get() or "").split(",") if s.strip()
         }
-        if not initial_set or DOC_SUPPLIER in initial_set:
-            initial_set = set()
 
         self.supplier_vars: dict[str, tk.BooleanVar] = {}
         self.supplier_checks: dict[str, ttk.Checkbutton] = {}
-        for name in [DOC_SUPPLIER] + self.suppliers:
-            checked = (name == DOC_SUPPLIER and not initial_set) or (name in initial_set)
+        for name in self.suppliers:
+            checked = name in initial_set
             var = tk.BooleanVar(value=checked)
             cb = ttk.Checkbutton(
                 inner,
                 text=name,
                 variable=var,
-                command=lambda n=name: self._on_supplier_toggle(n),
             )
-            cb.pack(anchor="w", padx=6, pady=2)
+            cb.pack(anchor="w", padx=8, pady=3)
             self.supplier_vars[name] = var
             self.supplier_checks[name] = cb
+        # если ведомость не загружена — подсказка, иначе счётчик
+        if not self.suppliers:
+            ttk.Label(inner, text="Загрузите ведомость — здесь появятся поставщики", style="PickHint.TLabel").pack(anchor="w", padx=8, pady=6)
+
+    def _select_sklad(self, name: str) -> None:
+        """Наглядный выбор склада — подсветка активной кнопки."""
+        self.sklad_var.set(name)
+        for sklad_name, btn in self.sklad_buttons.items():
+            is_sel = sklad_name == name
+            try:
+                btn.configure(
+                    background=ACCENT if is_sel else CARD,
+                    foreground="#FFFFFF" if is_sel else NAVY,
+                    font=("Segoe UI", 11, "bold" if is_sel else "normal"),
+                    relief="flat" if is_sel else "solid",
+                )
+            except Exception:
+                pass
+        # подсказку тоже можно освежить
+        try:
+            self.hint_label.configure(text=self._hint())
+        except Exception:
+            pass
 
     def _hint(self) -> str:
         if not self.suppliers:
             return (
-                "Ведомость не загружена — поставщик берётся из документа. "
-                "Загрузите ведомость, чтобы выбрать поставщика из неё."
+                "Ведомость не загружена — выберите склад, поставщик будет из документа. "
+                "Загрузите ведомость, чтобы выбрать поставщика из списка."
             )
         return (
-            f"В ведомости {len(self.suppliers)} поставщик(ов). Выберите своего — "
-            "номенклатура будет подбираться только среди его позиций, а файл "
-            "попадёт в папку «склад / поставщик»."
+            f"В ведомости {len(self.suppliers)} поставщик(ов) по алфавиту. "
+            "Отметьте своего — номенклатура подберётся только среди его позиций, "
+            "а файл попадёт в папку «склад / поставщик»."
         )
 
     # ------------------------------------------------------------------ данные
     def _on_supplier_toggle(self, name: str) -> None:
-        if name == DOC_SUPPLIER:
-            if self.supplier_vars[DOC_SUPPLIER].get():
-                for k, v in self.supplier_vars.items():
-                    if k != DOC_SUPPLIER:
-                        v.set(False)
-        else:
-            if self.supplier_vars[name].get():
-                self.supplier_vars[DOC_SUPPLIER].set(False)
+        # оставлено для совместимости, но «как в документе» убран
+        pass
 
     @property
     def supplier_value(self) -> str:
-        """Выбранный поставщик (пустая строка — как в документе)."""
-        if self.supplier_vars.get(DOC_SUPPLIER) and self.supplier_vars[DOC_SUPPLIER].get():
-            return ""
+        """Выбранный поставщик (пустая строка — берём из документа, если ничего не выбрано)."""
         checked = [
             name
             for name, var in self.supplier_vars.items()
-            if name != DOC_SUPPLIER and var.get()
+            if var.get()
         ]
         if not checked:
             return ""
@@ -215,6 +280,7 @@ def install_styles(style) -> None:
         style.map("Pick.TButton", background=[("active", BG_SOFT)])
         style.configure("PickPrimary.TButton", font=("Segoe UI", 10, "bold"), padding=(18, 7), background=ACCENT, foreground="#FFFFFF")
         style.map("PickPrimary.TButton", background=[("active", ACCENT_HOVER)])
+        style.configure("Sklad.TRadiobutton", font=("Segoe UI", 11), padding=(10, 8))
         style.configure("Chooser.Toplevel", background=CARD)
         style.configure("Chooser.TLabel", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 8))
         style.configure("Chooser.TButton", font=("Segoe UI", 9), padding=(6, 3))
@@ -247,7 +313,13 @@ class _VedChooser:
             self.win.configure(background=CARD)
         except Exception:  # noqa: BLE001 - не критично
             pass
-        height = min(360, 28 * len(self.items) + 48)
+        # на всю высоту экрана (требование 1.9.18)
+        try:
+            screen_h = app.winfo_screenheight() if hasattr(app, "winfo_screenheight") else 800
+            max_h = max(400, screen_h - y - 40) if screen_h else 600
+            height = min(max_h, max(360, 28 * len(self.items) + 64))
+        except Exception:
+            height = min(600, 28 * len(self.items) + 64)
         try:
             popup_w = max(int(width), 640)
             self.win.geometry(f"{popup_w}x{int(height)}+{int(x)}+{int(y)}")

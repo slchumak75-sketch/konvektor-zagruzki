@@ -829,16 +829,17 @@ def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
     dialogs.open_result = (path,)
     app.on_add_files()
     dialog = _dialog(app)
-    # склады заказчика
+    # склады заказчика — наглядные кнопки
     assert list(dialog.sklad_buttons) == ["Мир", "Кореличи"]
-    # в списке поставщиков — «как в документе» и все поставщики ведомости (галочки)
+    # в списке поставщиков — все поставщики ведомости по алфавиту (без «как в документе»)
     values = list(dialog.supplier_checks)
-    assert values[0].startswith("— как в документе")
     assert 'ООО "ОМА"' in values
+    assert values == sorted(values, key=str.casefold)
+    assert not any(v.startswith("— как в документе") for v in values)
 
-    dialog.sklad_var.set("Кореличи")
+    # выбор склада через наглядную кнопку
+    dialog._select_sklad("Кореличи")
     dialog.supplier_vars['ООО "ОМА"'].set(True)
-    dialog._on_supplier_toggle('ООО "ОМА"')
     dialog.on_ok()
     assert app._sklad == "Кореличи"
     assert app._supplier_choice == 'ООО "ОМА"'

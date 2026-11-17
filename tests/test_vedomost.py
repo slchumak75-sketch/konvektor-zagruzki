@@ -146,7 +146,11 @@ def test_supplier_key_ignores_quotes_spaces_and_legal_form():
 
 
 def test_article_and_barcode_normalisation():
-    assert norm_article("01_0356659") == norm_article("01 0356659")
+    # префикс до «_» не учитывается (01_0356659 → 0356659, как в Кореличи (4).xls)
+    assert norm_article("01_0356659") == "0356659"
+    assert norm_article("02_0311059") == "0311059"
+    assert norm_article("01_0356659") == norm_article("0356659")
+    assert norm_article("01 0356659") == "010356659"
     # 8 цифр без верной контрольной суммы — это артикул, а не штрихкод
     assert norm_barcode("00000115") == ""
     assert norm_barcode("4607011539220") == "4607011539220"
