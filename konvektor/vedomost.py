@@ -747,7 +747,7 @@ class MatchEntry:
         if not self.matched:
             return "—"
         if self.how in (MATCH_BARCODE, MATCH_ARTICLE) and self.score >= 1.0:
-            return "Полное"
+            return "ОК"
         if self.how == HOW_MANUAL:
             return HOW_MANUAL
         return f"{self.score:.0%}"
