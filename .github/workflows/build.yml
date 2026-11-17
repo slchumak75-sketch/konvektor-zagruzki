@@ -90,10 +90,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item dist\Konvektor.exe package\
-          Copy-Item dist\Konvektor-cli.exe package\
-          Copy-Item README.md package\README.md
-          Copy-Item docs\Пользователю.md package\"Как пользоваться.md"
+          Copy-Item -Recurse -Force dist\Konvektor package\Konvektor
+          Copy-Item -Force dist\Konvektor-cli.exe package\
+          if (Test-Path README.md) { Copy-Item -Force README.md package\README.md }
           Compress-Archive -Path package\* -DestinationPath Konvektor-windows.zip -Force
 
       - name: Сохранить готовые файлы
