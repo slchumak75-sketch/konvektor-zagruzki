@@ -55,10 +55,13 @@ MATCH_TITLES = OrderedDict(
 )
 
 #: Порядок подбора: выбранный ключ, затем остальные как запасные варианты.
+#: Если выбран штрихкод: 1-штрихкод 2-артикул 3-наименование.
+#: Если выбран артикул: 1-артикул 2-штрихкод 3-наименование.
+#: Если выбрано наименование: только наименование (без fallback).
 MATCH_ORDER = {
     MATCH_BARCODE: (MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME),
     MATCH_ARTICLE: (MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME),
-    MATCH_NAME: (MATCH_NAME, MATCH_ARTICLE, MATCH_BARCODE),
+    MATCH_NAME: (MATCH_NAME,),
 }
 
 #: Как в отчёте называется подбор, сделанный пользователем вручную.
