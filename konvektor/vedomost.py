@@ -650,6 +650,7 @@ def parse_vedomost(source: Any) -> Vedomost:
         "barcode": roles.get("barcode"),
         "unit": roles.get("unit"),
         "supplier": roles.get("supplier"),
+        "sklad": roles.get("sklad"),
         "group": roles.get("group"),
         "stock": roles.get("stock"),
         "price": roles.get("price"),
