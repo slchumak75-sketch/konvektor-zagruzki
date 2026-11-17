@@ -446,7 +446,7 @@ class Vedomost:
         return self._by_name.get(norm_text(name))
 
     def candidates(
-        self, name: Any, supplier: str = "", limit: int = 40
+        self, name: Any, supplier: str = "", limit: int = 40, sklad: str = ""
     ) -> List[Tuple[float, VedRow]]:
         """Похожие позиции ведомости по названию: [(сходство, позиция), …].
 
@@ -471,9 +471,16 @@ class Vedomost:
         if not hits:
             return []
         doc_norm = norm_text(name)
+        sklad_l = sklad.strip().lower()
         scored: List[Tuple[float, VedRow]] = []
-        for i, _weight in sorted(hits.items(), key=lambda kv: -kv[1])[:600]:
+        checked = 0
+        for i, _weight in sorted(hits.items(), key=lambda kv: -kv[1]):
             row = self.rows[i]
+            if sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                continue
+            checked += 1
+            if checked > 600:
+                break
             score = _score_words(
                 doc_words, self._word_lists[i], doc_norm, self._norm_names[i], "", row.unit
             )
@@ -553,7 +560,7 @@ class Vedomost:
         exact = self.by_name(name)
         if exact is not None and self._in_scope(exact, supplier):
             return exact, 1.0
-        for score, row in self.candidates(name, supplier, limit=1):
+        for score, row in self.candidates(name, supplier, limit=1, sklad=sklad):
             return row, score
         return None
 
