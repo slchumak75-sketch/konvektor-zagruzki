@@ -26,12 +26,17 @@ SKLADS = ("Мир", "Кореличи")
 #: Пункт списка поставщиков: не выбирать, взять поставщика из документа.
 DOC_SUPPLIER = "— как в документе —"
 
-BG = "#F4F6FA"
+BG = "#F2F6FC"
+BG_SOFT = "#EAF0FA"
 CARD = "#FFFFFF"
-TEXT = "#1B2733"
-MUTED = "#5B6B7F"
-NAVY = "#1F3A5F"
-BORDER = "#D8E0EC"
+TEXT = "#1A2B42"
+MUTED = "#64748B"
+NAVY = "#1E3A5F"
+NAVY_LIGHT = "#2B4C7A"
+BORDER = "#D4DFEE"
+BORDER_LIGHT = "#E6EDF7"
+ACCENT = "#2563EB"
+ACCENT_HOVER = "#1D4ED8"
 
 
 class SourceDialog:
@@ -51,12 +56,18 @@ class SourceDialog:
         self.win = tk.Toplevel(master)
         try:
             self.win.title("Склад и поставщик")
-            self.win.geometry("560x300")
+            self.win.geometry("620x420")
             self.win.configure(background=BG)
             self.win.transient(master)
+            # модальное затемнение
+            try:
+                self.win.attributes("-topmost", True)
+                self.win.after(200, lambda: self.win.attributes("-topmost", False))
+            except Exception:
+                pass
             screen_h = self.win.winfo_screenheight()
             if screen_h and screen_h > 200:
-                self.win.geometry(f"560x{screen_h - 80}+100+20")
+                self.win.geometry(f"620x460+120+40")
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
 
@@ -66,51 +77,40 @@ class SourceDialog:
 
     # ------------------------------------------------------------------ вёрстка
     def _build(self) -> None:
-        pad = {"padx": 18}
-        tk.Label(
-            self.win,
-            text="Куда положить результат",
-            background=BG,
-            foreground=NAVY,
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", pady=(14, 2), **pad)
+        pad = {"padx": 20}
+        # заголовок-карточка
+        header = tk.Frame(self.win, background=NAVY, height=52)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+        tk.Label(header, text="  \U0001F4E6  Склад и поставщик", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="both", expand=True, padx=12)
 
-        sklad_row = ttk.Frame(self.win, style="Pick.TFrame")
-        sklad_row.pack(fill="x", pady=(2, 8), **pad)
+        card = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
+        card.pack(fill="x", padx=16, pady=(14, 8))
+        tk.Label(card, text="Куда положить результат", background=CARD, foreground=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=14, pady=(10, 4))
+        sklad_row = ttk.Frame(card, style="Pick.TFrame")
+        sklad_row.pack(fill="x", padx=14, pady=(4, 10))
         ttk.Label(sklad_row, text="Склад:", style="Pick.TLabel").pack(side="left")
         self.sklad_buttons = {}
         for name in SKLADS:
-            button = ttk.Radiobutton(
-                sklad_row, text=name, value=name, variable=self.sklad_var
-            )
-            button.pack(side="left", padx=(12, 0))
+            button = ttk.Radiobutton(sklad_row, text=name, value=name, variable=self.sklad_var)
+            button.pack(side="left", padx=(16, 0))
             self.sklad_buttons[name] = button
 
-        ttk.Label(self.win, text="Поставщик:", style="Pick.TLabel").pack(anchor="w", **pad)
+        ttk.Label(self.win, text="  Поставщик:", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", **pad)
         buttons = ttk.Frame(self.win, style="Pick.TFrame")
-        buttons.pack(side="bottom", fill="x", pady=(8, 12), **pad)
-        self.ok_btn = ttk.Button(
-            buttons, text="Продолжить", style="PickPrimary.TButton", command=self.on_ok
-        )
+        buttons.pack(side="bottom", fill="x", pady=(12, 16), **pad)
+        self.ok_btn = ttk.Button(buttons, text="✓  Продолжить", style="PickPrimary.TButton", command=self.on_ok)
         self.ok_btn.pack(side="right")
-        self.cancel_btn = ttk.Button(
-            buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel
-        )
-        self.cancel_btn.pack(side="right", padx=(0, 8))
+        self.cancel_btn = ttk.Button(buttons, text="Отмена", style="Pick.TButton", command=self.on_cancel)
+        self.cancel_btn.pack(side="right", padx=(0, 10))
 
-        self.hint_label = ttk.Label(
-            self.win,
-            text=self._hint(),
-            style="PickHint.TLabel",
-            wraplength=500,
-            justify="left",
-        )
+        self.hint_label = ttk.Label(self.win, text=self._hint(), style="PickHint.TLabel", wraplength=540, justify="left")
         self.hint_label.pack(side="bottom", anchor="w", **pad)
 
-        list_frame = ttk.Frame(self.win, style="Pick.TFrame")
-        list_frame.pack(fill="both", expand=True, pady=(2, 6), **pad)
+        list_frame = tk.Frame(self.win, background=CARD, highlightbackground=BORDER, highlightthickness=1, bd=0)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=(6, 8))
 
-        canvas = tk.Canvas(list_frame, height=160, highlightthickness=1, highlightbackground="#C5D2E0", background=BG)
+        canvas = tk.Canvas(list_frame, height=180, highlightthickness=0, background=CARD)
         vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas, style="Pick.TFrame")
         inner.bind(
@@ -206,21 +206,19 @@ CHOICE_CUSTOM = object()
 
 
 def install_styles(style) -> None:
-    """Завести в ttk-тему стили диалога и выпадающего списка."""
+    """Завести в ttk-тему стили диалога и выпадающего списка — современный вид 1.9.17."""
     try:
         style.configure("Pick.TFrame", background=BG)
-        style.configure("Pick.TLabel", background=BG, foreground=TEXT, font=("Segoe UI", 10))
-        style.configure(
-            "PickHint.TLabel",
-            background=BG,
-            foreground=MUTED,
-            font=("Segoe UI", 9),
-        )
-        style.configure("Pick.TButton", font=("Segoe UI", 10), padding=(14, 5))
-        style.configure("PickPrimary.TButton", font=("Segoe UI", 10), padding=(18, 5))
+        style.configure("Pick.TLabel", background=CARD, foreground=TEXT, font=("Segoe UI", 10))
+        style.configure("PickHint.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 8))
+        style.configure("Pick.TButton", font=("Segoe UI", 10), padding=(14, 6), background=CARD, foreground=TEXT)
+        style.map("Pick.TButton", background=[("active", BG_SOFT)])
+        style.configure("PickPrimary.TButton", font=("Segoe UI", 10, "bold"), padding=(18, 7), background=ACCENT, foreground="#FFFFFF")
+        style.map("PickPrimary.TButton", background=[("active", ACCENT_HOVER)])
         style.configure("Chooser.Toplevel", background=CARD)
-        style.configure("Chooser.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
-        style.configure("Chooser.TButton", font=("Segoe UI", 9), padding=(6, 2))
+        style.configure("Chooser.TLabel", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 8))
+        style.configure("Chooser.TButton", font=("Segoe UI", 9), padding=(6, 3))
+        style.configure("Chooser.Search.TEntry", fieldbackground="#FFFFFF", padding=(8, 6))
     except Exception:  # noqa: BLE001 - оформление не критично
         pass
 
@@ -241,41 +239,60 @@ class _VedChooser:
         self.win = tk.Toplevel(app)
         try:
             self.win.overrideredirect(True)
+            # тень/граница для современного вида
+            self.win.configure(background=BORDER, bd=1, relief="solid")
         except Exception:  # noqa: BLE001 - не критично
             pass
         try:
             self.win.configure(background=CARD)
         except Exception:  # noqa: BLE001 - не критично
             pass
-        height = min(320, 26 * len(self.items) + 34)
+        height = min(360, 28 * len(self.items) + 48)
         try:
-            popup_w = max(int(width), 620)
+            popup_w = max(int(width), 640)
             self.win.geometry(f"{popup_w}x{int(height)}+{int(x)}+{int(y)}")
         except Exception:  # noqa: BLE001 - не критично
             pass
 
+        # поиск внутри выпадающего списка — современный дизайн
+        try:
+            search_row = tk.Frame(self.win, background="#F8FAFC", highlightbackground=BORDER, highlightthickness=1)
+            search_row.pack(fill="x", padx=8, pady=(8, 6))
+            tk.Label(search_row, text="\U0001F50D", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(8, 4))
+            self.search_var = tk.StringVar()
+            self.search_entry = ttk.Entry(search_row, textvariable=self.search_var, style="Chooser.Search.TEntry", font=("Segoe UI", 9))
+            self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), pady=4)
+            self.search_entry.insert(0, "Поиск…")
+            self.search_entry.bind("<FocusIn>", lambda e: self.search_var.set("") if self.search_var.get()=="Поиск…" else None)
+            self.search_entry.bind("<KeyRelease>", self._on_search)
+        except Exception:
+            self.search_var = None
+
         self.box = tk.Listbox(
             self.win,
             activestyle="none",
-            borderwidth=1,
-            relief="solid",
+            borderwidth=0,
+            relief="flat",
             highlightthickness=0,
             exportselection=False,
             font=("Segoe UI", 10),
+            selectbackground="#EFF6FF",
+            selectforeground=NAVY,
+            background=CARD,
+            foreground=TEXT,
         )
         for label, _value in self.items:
             self.box.insert("end", label)
-        self.box.pack(fill="both", expand=True, padx=1, pady=(1, 0))
+        self.box.pack(fill="both", expand=True, padx=8, pady=(2, 4))
         if self.items:
             self.box.selection_set(0)
-        hint = "«не выбирать» → товар будет «Новинка»   ·   Esc — закрыть"
+        hint = "  \u25BC  «не выбирать» → товар будет «Новинка»   ·   Esc — закрыть   ·   начните печатать для поиска"
         try:
-            ttk.Label(self.win, text=hint, style="Chooser.TLabel").pack(
-                fill="x", padx=6, pady=(2, 4)
-            )
+            ttk.Label(self.win, text=hint, style="Chooser.TLabel").pack(fill="x", padx=8, pady=(4, 8))
         except Exception:  # noqa: BLE001 - подсказка не критична
             pass
 
+        self._all_items = list(self.items)
         self.box.bind("<ButtonRelease-1>", self._on_click)
         self.box.bind("<Return>", self._on_activate)
         self.box.bind("<Double-1>", self._on_activate)
@@ -291,6 +308,19 @@ class _VedChooser:
     def _on_click(self, _event=None):
         self._pick_current()
         return "break"
+
+    def _on_search(self, _event=None):
+        if not hasattr(self, "search_var") or self.search_var is None:
+            return
+        q = self.search_var.get().strip().lower()
+        self.box.delete(0, "end")
+        self.items = []
+        for label, val in self._all_items:
+            if not q or q == "поиск…" or q in label.lower():
+                self.box.insert("end", label)
+                self.items.append((label, val))
+        if self.items:
+            self.box.selection_set(0)
 
     def _on_activate(self, _event=None):
         self._pick_current()
