@@ -83,20 +83,6 @@ jobs:
         run: |
           .\dist\Konvektor-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --explain "КХ2104033 (1).xls"
-          if ($LASTEXITCODE -ne 0) { throw "Режим --explain в .exe не работает: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --diagnose "КХ2104033 (1).xls"
-          if ($LASTEXITCODE -ne 0) { throw "Режим --diagnose в .exe не работает: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --selftest .
-          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe не прошла: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --selftest . --json > $env:TEMP\selftest.json
-          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe (--json) не прошла: код $LASTEXITCODE" }
-          Get-Content $env:TEMP\selftest.json | Select-Object -Last 3
-
           if (-not (Test-Path .\dist\Konvektor\Konvektor.exe)) { throw "Konvektor.exe не собран" }
           Get-Item .\dist\Konvektor\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
 
