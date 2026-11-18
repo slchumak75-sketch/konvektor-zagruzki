@@ -124,6 +124,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Тестовые версии не должны заменять последний стабильный релиз.
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
+          make_latest: ${{ contains(github.ref_name, 'rc') && 'false' || 'legacy' }}
           files: |
             dist/Konvektor.exe
             dist/Konvektor-cli.exe
