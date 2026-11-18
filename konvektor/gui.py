@@ -1191,8 +1191,6 @@ class KonvertorApp(_Base):
                 if len(issues) > 10:
                     details.append(f"И ещё ошибок: {len(issues) - 10}")
                 messagebox.showwarning(APP_NAME, text + ("\n\n" + "\n".join(details) if details else ""))
-            else:
-                messagebox.showinfo(APP_NAME, text)
         else:
             messagebox.showwarning(
                 APP_NAME,

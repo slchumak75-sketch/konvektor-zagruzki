@@ -986,3 +986,13 @@ def test_new_items_are_not_pink(gui):
     assert not app._is_mismatch(stored)
     app._retag_row("row1", stored)
     assert app.preview.row_tags["row1"] == ("even",)
+
+
+def test_conversion_completes_without_info_popup(gui):
+    app, _, dialogs = gui
+    dialogs.calls.clear()
+    app.on_convert()
+    _run(app)
+    assert app._pending_result.items_count > 0
+    assert app.save_btn.cget("state") == "normal"
+    assert not any(call[0] == "showinfo" for call in dialogs.calls)
