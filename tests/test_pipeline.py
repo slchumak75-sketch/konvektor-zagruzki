@@ -155,7 +155,8 @@ def test_source_columns(known_paths, tmp_path):
 def test_selftest(known_paths, sample_dir):
     ok, message = selftest(sample_dir)
     assert ok, message
-    assert "позиций 301" in message
+    # Старые образцы (301), МАВ/Элсви (64), Цветогамма (23).
+    assert "позиций 388" in message
 
 
 def test_empty_input(tmp_path):
@@ -530,3 +531,22 @@ def test_no_novinka_column_without_vedomost(known_paths, tmp_path):
     )
     assert "Новинка" not in header
     assert header == list(TEMPLATE_COLUMNS)
+
+
+def test_tsvetogamma_embedded_barcodes_and_names(tmp_path):
+    """Штрихкоды — OLE-объекты с координатами, а не значения ячеек."""
+    from pathlib import Path
+    source = Path(__file__).resolve().parent.parent / "цветогамма мир.xls"
+    result = convert([str(source)], str(tmp_path / "цветогамма.xlsx"), ConvertOptions())
+    assert result.items_count == 23
+    assert result.error_count == 0
+    assert result.warning_count == 0
+    assert result.items[0].name == "Эмаль ПФ-115 белая ТУ 0,8кг"
+    assert result.items[0].barcode == "4812355010858"
+    assert result.items[1].barcode == "4812355010889"
+    assert result.items[-1].barcode == "4812355008909"
+    assert all(item.barcode and item.name and not item.name.isdigit() for item in result.items)
+    assert result.items[0].vat_rate == 20 and result.items[0].vat_sum == 7.72
+    data = load_workbook(result.outputs[0])["Данные"]
+    assert data.cell(2, 1).value == "4812355010858"
+    assert data.cell(2, 3).value == "Эмаль ПФ-115 белая ТУ 0,8кг"

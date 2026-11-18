@@ -46,7 +46,7 @@
 | `konvektor/writer.py` | запись книги Excel | `write_workbook`, `WorkbookPayload`, `FileStat` |
 | `konvektor/pipeline.py` | сквозной сценарий, режимы, статистика | `convert`, `ConvertOptions`, `ConvertResult`, `selftest` |
 | `konvektor/cli.py` | консоль | `main(argv)` |
-| `konvektor/gui.py` | окно tkinter | `main(argv)`, `KonvektorApp` |
+| `konvektor/gui.py` | окно tkinter | `main(argv)`, `KonvertorApp` |
 
 ## Поток данных
 

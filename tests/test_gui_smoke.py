@@ -36,7 +36,7 @@ def gui(monkeypatch, known_paths, tmp_path):
     sample = next(
         (p for p in known_paths if p.name.startswith("Кореличи")), known_paths[0]
     )
-    app = module.KonvektorApp(initial_files=[str(sample)])
+    app = module.KonvertorApp(initial_files=[str(sample)])
     app.fake_dialogs = dialogs
     app.test_documents = str(documents)
     yield app, module, dialogs
@@ -64,7 +64,7 @@ def test_window_builds_with_single_file(gui, known_paths):
     app, module, _ = gui
     assert len(app.files) == 1
     assert app.file_var.get().startswith("Кореличи")
-    assert "Конвектор" in app.title()
+    assert "Конвертор" in app.title()
     # в окне две колонки наименования, «▼» для выбора и процент совпадения
     assert list(app.preview.columns_list) == [
         "Штрихкод", "Артикул", "Из документа", "Из ведомости", "▼", "% совпадения",
@@ -225,8 +225,8 @@ def test_path_field_with_browse_button(gui, tmp_path):
     app.out_var.set("   ")
     assert app.output_dir() == ""
     # и вписать любой другой
-    app.out_var.set("D:\\Мои документы\\Конвектор")
-    assert app.output_dir() == "D:\\Мои документы\\Конвектор"
+    app.out_var.set("D:\\Мои документы\\Конвертор")
+    assert app.output_dir() == "D:\\Мои документы\\Конвертор"
 
 
 def test_second_save_does_not_overwrite(gui):
@@ -333,7 +333,7 @@ def test_open_buttons_follow_save(gui, monkeypatch):
     assert app.open_folder_btn.cget("state") == "disabled"
 
     opened = []
-    monkeypatch.setattr(module.KonvektorApp, "_open_path", staticmethod(opened.append))
+    monkeypatch.setattr(module.KonvertorApp, "_open_path", staticmethod(opened.append))
 
     app.on_open_result()          # файла ещё нет — только сообщение
     assert opened == []
@@ -948,3 +948,23 @@ def test_chooser_uses_codes_from_real_vedomost(gui):
     labels = [label for label, row in app._chooser.items if getattr(row, "article", "") == "0356659"]
     assert labels and "штрихкод 4813426172277" in labels[0]
     assert "арт. 0356659" in labels[0]
+
+
+def test_exact_barcode_with_low_name_similarity_is_pink(gui, monkeypatch):
+    from types import SimpleNamespace
+    from konvektor.extract import Item
+    from konvektor.vedomost import MatchEntry, VedRow, MATCH_BARCODE
+    app, module, _ = gui
+    monkeypatch.setattr(module.app_settings, "load_settings", lambda: {"name_threshold": 90})
+    key = ("file.xls", "sheet", 1)
+    ved = VedRow(nomenclature="Эмаль белая 1 кг", barcode="4812355010858")
+    entry = MatchEntry(key=key, row=1, doc_name="Грунтовка зелёная 5 кг",
+                       doc_barcode="4812355010858", ved_row=ved,
+                       matched=True, score=1.0, how=MATCH_BARCODE)
+    app._matcher = SimpleNamespace(by_key={key: entry})
+    stored = {"key": key, "item": Item(source=key[0], sheet=key[1], row=1)}
+    app._preview_rows["row1"] = stored
+    assert entry.score_title == "ОК"
+    assert app._is_mismatch(stored)
+    monkeypatch.setattr(module.app_settings, "load_settings", lambda: {"name_threshold": 0})
+    assert not app._is_mismatch(stored)

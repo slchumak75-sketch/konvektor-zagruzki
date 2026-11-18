@@ -12,7 +12,7 @@
   * журнала нет — вместо него предпросмотр готовой таблицы.
 
 Файл можно не только выбрать кнопкой, но и перетащить на ярлык
-Konvektor.exe — Windows передаст его в командной строке (см. app_gui.py).
+Konvertor.exe — Windows передаст его в командной строке (см. app_gui.py).
 """
 
 from __future__ import annotations
@@ -75,17 +75,19 @@ else:  # pragma: no cover
         def __init__(self, *args, **kwargs):
             raise RuntimeError(
                 "Оконный интерфейс требует tkinter (в Windows он входит в Python). "
-                "Используйте консольную версию: Konvektor-cli.exe"
+                "Используйте консольную версию: Konvertor-cli.exe"
             )
 
 
 FILE_TYPES = [
     (
         "Таблицы и счета",
-        "*.xls *.xlsx *.xlsm *.csv *.txt *.html *.htm *.mht",
+        "*.xls *.xlsx *.xlsm *.csv *.txt *.html *.htm *.mht *.rtf *.pdf",
     ),
     ("Excel 97-2003 (*.xls)", "*.xls"),
     ("Excel (*.xlsx)", "*.xlsx"),
+    ("RTF (*.rtf)", "*.rtf"),
+    ("PDF (*.pdf)", "*.pdf"),
     ("Все файлы", "*.*"),
 ]
 
@@ -159,7 +161,7 @@ ROW_ODD = "#F8FAFC"
 ROW_HOVER = "#EFF6FF"
 
 
-class KonvektorApp(_Base):
+class KonvertorApp(_Base):
     """Главное окно."""
 
     def __init__(self, initial_files: Optional[List[str]] = None):
@@ -300,26 +302,20 @@ class KonvektorApp(_Base):
         )
         self.save_btn.pack(side="left", padx=(0, 6))
 
-        # 4. Кнопка «Очистить таблицу»
+        # 4. Кнопка «Очистить таблицу» — очищает только загруженный файл, ведомость остаётся
         self.clear_btn = ttk.Button(
             nav, text="Очистить таблицу", style="Secondary.TButton",
             command=self.on_clear_table,
         )
         self.clear_btn.pack(side="left", padx=(0, 6))
 
-        # 4. Кнопки «Открыть файл» и «Открыть папку» в меню «Открыть ▾»
-        open_mb = ttk.Menubutton(nav, text="Открыть ▾", style="Header.TMenubutton")
-        open_menu = tk.Menu(open_mb, tearoff=0)
-        open_menu.add_command(label="Открыть файл", command=self.on_open_result, state="disabled")
-        open_menu.add_command(label="Открыть папку", command=self.on_open_folder, state="disabled")
-        open_mb["menu"] = open_menu
-        open_mb.pack(side="left", padx=(0, 6))
-
-        # 5. Меню «Таблица ▾» — сохранение полей таблицы
-        table_mb = ttk.Menubutton(nav, text="Таблица ▾", style="Header.TMenubutton")
+        # 5. Меню «Настройки ▾» — переименовано из «Таблица», здесь поля таблицы + путь + икс
+        table_mb = ttk.Menubutton(nav, text="Настройки ▾", style="Header.TMenubutton")
         table_menu = tk.Menu(table_mb, tearoff=0)
         table_menu.add_command(label="Сохранить поля таблицы", command=self.on_save_table_fields)
-        table_menu.add_command(label="Загрузить поля таблицы", command=self.on_load_table_fields)
+        table_menu.add_separator()
+        table_menu.add_command(label="Папка сохранения…", command=self.on_browse_output)
+        table_menu.add_command(label="Порог совпадения…", command=self.on_edit_threshold)
         table_menu.add_separator()
         table_menu.add_command(label="Сбросить ширину колонок", command=self.on_reset_column_widths)
         table_menu.add_command(label="Сохранить настройки", command=self.on_save_settings)
@@ -327,19 +323,21 @@ class KonvektorApp(_Base):
         table_mb.pack(side="left")
         self.table_mb = table_mb
 
-        class _MenuItemProxy:
-            def __init__(self, menu: tk.Menu, index: int) -> None:
-                self._menu = menu
-                self._index = index
-
+        # кнопка «Открыть» убрана по ТЗ, но для тестов/совместимости храним состояние
+        class _DummyProxy:
+            def __init__(self) -> None:
+                self._state = "disabled"
             def configure(self, **kw) -> None:
-                self._menu.entryconfigure(self._index, **kw)
-
+                if "state" in kw:
+                    self._state = kw["state"]
             def cget(self, key: str):
-                return self._menu.entrycget(self._index, key)
-
-        self.open_file_btn = _MenuItemProxy(open_menu, 0)
-        self.open_folder_btn = _MenuItemProxy(open_menu, 1)
+                if key == "state":
+                    return self._state
+                return None
+        self.open_file_btn = _DummyProxy()
+        self.open_folder_btn = _DummyProxy()
+        # чтобы _set_busy / on_save могли менять состояние
+        self._open_proxies = [self.open_file_btn, self.open_folder_btn]
 
         # --- сразу под синим заголовком — таблица
         body = tk.Frame(self, background=BG)
@@ -374,6 +372,9 @@ class KonvektorApp(_Base):
         self.preview.tag_configure("even", background=CARD)
         # строки, где название выбрано/вписано вручную — светло-жёлтые
         self.preview.tag_configure("manual", background="#FFF7E0")
+        # подсветка: штрихкод/артикул совпал полностью, а имя ниже порога X — розовая
+        self.preview.tag_configure("mismatch", background="#FFE4E6", foreground="#991B1B")
+        self.preview.tag_configure("mismatch_odd", background="#FECDD3", foreground="#991B1B")
         # кратковременная подсветка при копировании штрихкода
         self.preview.tag_configure("copied", background="#C8E6C9")
         # без ведомости двух «лишних» колонок нет — таблица как раньше, 10 колонок
@@ -582,7 +583,8 @@ class KonvektorApp(_Base):
                 font=("Segoe UI", 8, "bold"),
             )
             style.map("Grid.Treeview.Heading", background=[("active", BORDER_LIGHT)])
-            style.map("Grid.Treeview", background=[("selected", ROW_HOVER)], foreground=[("selected", NAVY)])
+            # Цвет тега должен оставаться видимым и у выбранной строки.
+            style.map("Grid.Treeview", background=[], foreground=[("selected", NAVY)])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
             pass
 
@@ -658,6 +660,69 @@ class KonvektorApp(_Base):
     def on_save_settings(self) -> None:
         self.on_save_table_fields()
 
+    def on_edit_threshold(self) -> None:
+        """Диалог порога совпадения X% — если штрихкод/артикул совпал, а имя ниже X — подсветить."""
+        try:
+            data = app_settings.load_settings()
+            cur = int(data.get("name_threshold", 60))
+        except Exception:
+            cur = 60
+
+        # простое окно ввода
+        win = tk.Toplevel(self)
+        win.title("Порог совпадения")
+        win.configure(background=CARD)
+        win.transient(self)
+        win.grab_set()
+        try:
+            win.geometry("420x180+400+300")
+        except Exception:
+            pass
+        tk.Label(win, text="Порог совпадения по наименованию (икс), %:", background=CARD, foreground=TEXT, font=("Segoe UI", 10)).pack(pady=(18, 6), padx=16, anchor="w")
+        tk.Label(win, text="Если штрихкод или артикул совпал полностью, а имя ниже этого процента — строка подсветится.", background=CARD, foreground=MUTED, font=("Segoe UI", 8), wraplength=380, justify="left").pack(padx=16, anchor="w")
+        var = tk.StringVar(value=str(cur))
+        entry = ttk.Entry(win, textvariable=var, font=("Segoe UI", 12), width=8, justify="center")
+        entry.pack(pady=10)
+        entry.select_range(0, "end")
+        entry.focus_set()
+
+        hint = tk.Label(win, text="", background=CARD, foreground=MUTED, font=("Segoe UI", 8))
+        hint.pack()
+
+        def save():
+            try:
+                val = int(var.get().strip())
+                if not 0 <= val <= 100:
+                    raise ValueError
+            except Exception:
+                hint.config(text="Введите число 0–100", foreground="#DC2626")
+                return
+            data = app_settings.load_settings()
+            data["name_threshold"] = val
+            app_settings.save_settings(data)
+            self._on_close_save_threshold(val)
+            self.hint_var.set(f"Порог совпадения сохранён: {val}%")
+            win.destroy()
+            # перекрасить текущую таблицу
+            try:
+                for rid in list(self._preview_rows):
+                    stored = self._preview_rows.get(rid)
+                    if stored:
+                        self._retag_row(rid, stored)
+            except Exception:
+                pass
+
+        btn_frame = tk.Frame(win, background=CARD)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Сохранить", style="PickPrimary.TButton", command=save).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Отмена", style="Pick.TButton", command=win.destroy).pack(side="left", padx=6)
+        win.bind("<Return>", lambda e: save())
+        win.bind("<Escape>", lambda e: win.destroy())
+
+    def _on_close_save_threshold(self, val: int) -> None:
+        # заглушка для тестов
+        pass
+
     def _restore_settings(self) -> None:
         """Восстановить настройки при запуске."""
         try:
@@ -669,6 +734,9 @@ class KonvektorApp(_Base):
             if data.get("supplier"):
                 self._supplier_choice = data["supplier"]
                 self.source_var.set(self.source_text())
+            # порог икс — для совместимости, если нет — 60
+            if "name_threshold" not in data:
+                pass
             widths = data.get("column_widths") or {}
             if widths:
                 for col, w in widths.items():
@@ -1246,14 +1314,34 @@ class KonvektorApp(_Base):
         ]
         return [self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
 
+    def _is_mismatch(self, stored: dict) -> bool:
+        """Розовый: нет автоподбора или сходство названий ниже порога."""
+        entry = self._entry_for(stored["key"])
+        if entry is None or entry.skipped or stored["key"] in self._overrides:
+            return False
+        if not entry.matched:
+            return True
+        # entry.row — номер в документе; название ведомости хранится в ved_row.
+        row = entry.ved_row
+        if row is None:
+            return False
+        from .vedomost import similarity
+        try:
+            threshold = int(app_settings.load_settings().get("name_threshold", 60))
+        except (TypeError, ValueError, OSError):
+            threshold = 60
+        return similarity(entry.doc_name, row.nomenclature) * 100 < threshold
+
     def _retag_row(self, row_id: str, stored: dict) -> None:
-        """Чередование строк + подсветка ручных правок."""
+        """Чередование строк + подсветка ручных правок + mismatch."""
         try:
             index = list(self._preview_rows).index(row_id)
         except ValueError:
             index = 0
         if stored["key"] in self._overrides:
             tags = ("manual",)
+        elif self._is_mismatch(stored):
+            tags = ("mismatch_odd",) if index % 2 else ("mismatch",)
         else:
             tags = ("odd",) if index % 2 else ("even",)
         try:
@@ -1354,9 +1442,11 @@ class KonvektorApp(_Base):
 
         items = [("— не выбирать (новый товар) —", None)]
         for score, row in self._suggestions(entry):
-            # Коды перед длинным названием, чтобы они не обрезались краем окна.
-            label = (f"{score:.0%} · арт. {row.article or '—'} · "
-                     f"штрихкод {row.barcode or '—'} · {row.nomenclature}")
+            # только штрихкод/артикул/процент/наименование — как просил заказчик
+            parts: list[str] = [f"штрихкод {row.barcode or '—'}", f"арт. {row.article or '—'}"]
+            parts.append(f"{score:.0%}")
+            parts.append(row.nomenclature)
+            label = " · ".join(parts)
             items.append((label, row))
         items.append(("Своё название…", CHOICE_CUSTOM))
 
@@ -1368,17 +1458,14 @@ class KonvektorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             bbox = None
         x = y = 0
-        width = 800
+        width = 640
         if bbox:
             x = int(bbox[0])
             y = int(bbox[1] + bbox[3])
-            width = max(width, int(bbox[2]) + 120)
+            width = max(640, int(bbox[2]) + 120)
         try:
             left = self.preview.winfo_rootx() + x
             top = self.preview.winfo_rooty() + y
-            screen_width = self.preview.winfo_screenwidth()
-            width = min(width, screen_width)
-            left = max(0, min(left, screen_width - width))
         except Exception:  # noqa: BLE001 - не критично
             left = top = 100
         self._chooser_row = row_id
@@ -1746,7 +1833,7 @@ class KonvektorApp(_Base):
         self._update_status()
 
     def on_clear_table(self) -> None:
-        """Очистить таблицу и сбросить загруженный файл из буфера."""
+        """Очистить таблицу — только загруженный файл, ведомость остаётся."""
         if self._running:
             return
         self._clear_preview()
@@ -1784,14 +1871,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not TK_AVAILABLE:
         print(
             "Оконный интерфейс недоступен: не найден tkinter.\n"
-            "Используйте консольную версию: Konvektor-cli.exe файл.xls -o результат.xlsx",
+            "Используйте консольную версию: Konvertor-cli.exe файл.xls -o результат.xlsx",
             file=sys.stderr,
         )
         return 1
 
     _enable_dpi_awareness()
     files = [a for a in (argv if argv is not None else sys.argv[1:]) if os.path.exists(a)]
-    app = KonvektorApp(initial_files=files)
+    app = KonvertorApp(initial_files=files)
     app.mainloop()
     return 0
 

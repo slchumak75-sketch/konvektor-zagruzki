@@ -110,10 +110,12 @@ def classify_header(value: Any) -> Optional[Tuple[str, float]]:
     if "штрих" in t or "barcode" in t or "ean" in t or "штрихкод" in t:
         return (BARCODE, 3.0)
 
-    if "артикул" in t or re.search(r"\bарт\b", t):
+    if "артикул" in t or "инвент" in t or re.search(r"\bарт\b", t):
         return (ARTICLE, 3.0)
 
-    if "ставка" in t:
+    # В некоторых бланках слово разбито переносом: «Став ка НДС».
+    compact = re.sub(r"[\s-]+", "", t)
+    if "ставка" in compact:
         return (VAT_RATE, 3.0)
 
     if "цена" in t or "price" in t:
@@ -145,7 +147,7 @@ def classify_header(value: Any) -> Optional[Tuple[str, float]]:
     if ("ед" in t and "изм" in t) or t in ("ед", "ед.", "единица", "ед.изм", "ед. изм", "ед. измер"):
         return (UNIT, 3.0)
 
-    if "сумм" in t or "стоимост" in t:
+    if "сумм" in t or "стоимост" in compact:
         return (SUM, 2.0)
 
     if "код" in t or "code" in t:

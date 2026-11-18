@@ -37,6 +37,8 @@ SUPPORTED_EXTENSIONS = (
     ".htm",
     ".mht",
     ".mhtml",
+    ".rtf",
+    ".pdf",
 )
 
 MODE_COMBINED = "combined"  # все файлы в один лист «Данные»
@@ -288,7 +290,7 @@ def convert(
             result.errors.append(msg)
             result.notes.append(
                 f"{os.path.basename(path)}: подсказка — закройте файл в Excel и проверьте, "
-                "что это настоящий Excel; разбор файла: Konvektor-cli.exe --diagnose "
+                "что это настоящий Excel; разбор файла: Konvertor-cli.exe --diagnose "
                 f"\"{os.path.basename(path)}\""
             )
             log("  ! " + msg)

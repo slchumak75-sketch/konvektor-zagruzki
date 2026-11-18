@@ -1,6 +1,6 @@
 """Сохранение настроек окна — поля таблицы, склад, папки, размеры.
 
-Хранится в `%APPDATA%/Konvektor/settings.json` (Windows) или `~/.config/konvektor/settings.json`
+Хранится в `%APPDATA%/Konvertor/settings.json` (Windows) или `~/.config/konvertor/settings.json`
 (Linux). Если записать не удалось — молча пропускаем, работа программы не ломается.
 """
 
@@ -11,8 +11,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-APP_DIR_NAME = "Konvektor"
+APP_DIR_NAME = "Konvertor"
 SETTINGS_FILE = "settings.json"
+# старое имя для миграции с предыдущих версий (Конвектор)
+LEGACY_APP_DIR_NAME = "Konvektor"
 
 DEFAULTS: Dict[str, Any] = {
     "window_geometry": "",
@@ -24,6 +26,7 @@ DEFAULTS: Dict[str, Any] = {
     "preview_columns_order": [],
     "overrides": {},  # vedomost_path -> {key -> value} (для будущих сессий)
     "table_fields": {},  # произвольные поля таблицы, сохраняемые пользователем
+    "name_threshold": 60,  # процент совпадения по наименованию (икс) — если штрихкод/артикул совпал, а имя ниже икс — подсветить
 }
 
 
@@ -33,6 +36,17 @@ def settings_dir() -> Path:
     if appdata and os.path.isdir(appdata):
         return Path(appdata) / APP_DIR_NAME
     # Linux / fallback
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "konvertor"
+    return Path.home() / ".config" / "konvertor"
+
+
+def _legacy_settings_dir() -> Path:
+    """Старая папка настроек (Конвектор) для миграции."""
+    appdata = os.environ.get("APPDATA")
+    if appdata and os.path.isdir(appdata):
+        return Path(appdata) / LEGACY_APP_DIR_NAME
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "konvektor"
@@ -47,6 +61,10 @@ def load_settings() -> Dict[str, Any]:
     """Прочитать настройки, вернуть копию DEFAULTS + файл."""
     data = dict(DEFAULTS)
     path = settings_path()
+    legacy = _legacy_settings_dir() / SETTINGS_FILE
+    # миграция: если новой папки нет, а старая есть — читаем оттуда
+    if not path.is_file() and legacy.is_file():
+        path = legacy
     if not path.is_file():
         return data
     try:

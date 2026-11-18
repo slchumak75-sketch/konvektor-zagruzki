@@ -235,6 +235,9 @@ def extract_sheet(sf: SourceFile, sheet: Sheet) -> SheetExtraction:
 
         # --- проверка гипотез по данным, а не только по подписям -----------
         prof = layout.profiles(grid, data_start, end)
+        decision = layout.repair_name_column(h, prof)
+        if decision is not None:
+            res.decisions.append(decision)
         decision = layout.infer_barcode_column(h, prof)
         if decision is not None:
             res.decisions.append(decision)

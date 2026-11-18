@@ -211,6 +211,26 @@ def profiles(
 # --------------------------------------------------------------------------- #
 #  Достройка ролей по данным
 # --------------------------------------------------------------------------- #
+def repair_name_column(header: HeaderInfo, prof: Dict[int, ColumnProfile]) -> Optional[AnalysisDecision]:
+    """В объединённой шапке название может стоять правее колонки с номерами."""
+    col = header.col(detect.NAME)
+    if col is None or col not in prof:
+        return None
+    current = prof[col]
+    next_col = col + 1
+    candidate = prof.get(next_col)
+    if (current.filled < 2 or current.numeric_ratio < 0.8 or candidate is None
+            or candidate.filled < 2 or candidate.text_ratio < 0.8
+            or candidate.avg_len < 8 or next_col in header.cols.values()):
+        return None
+    # У соседней колонки под общей шапкой нет собственной подписи.
+    if next_col < len(header.raw) and clean_text(header.raw[next_col]):
+        return None
+    header.cols[detect.NAME] = next_col
+    return AnalysisDecision("name", "наименование сдвинуто из колонки номеров под общей шапкой",
+                            {"было": col + 1, "стало": next_col + 1})
+
+
 def infer_barcode_column(
     header: HeaderInfo, prof: Dict[int, ColumnProfile]
 ) -> Optional[AnalysisDecision]:

@@ -61,48 +61,48 @@ jobs:
       - name: Установить зависимости
         run: pip install -r requirements-dev.txt
 
-      - name: Собрать оконную версию (Konvektor.exe)
+      - name: Собрать оконную версию (Konvertor.exe)
         shell: pwsh
         run: >
           pyinstaller --noconfirm --onefile --noconsole --noupx
-          --name Konvektor
+          --name Konvertor
           --icon assets/konvektor.ico
           --add-data "assets/konvektor_icon.png;assets"
           app_gui.py
 
-      - name: Собрать консольную версию (Konvektor-cli.exe)
+      - name: Собрать консольную версию (Konvertor-cli.exe)
         shell: pwsh
         run: >
           pyinstaller --noconfirm --onefile --console --noupx
-          --name Konvektor-cli
+          --name Konvertor-cli
           --icon assets/konvektor.ico
           app_cli.py
 
       - name: Проверить собранные .exe
         shell: pwsh
         run: |
-          .\dist\Konvektor-cli.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
-          if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
-          Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
+          .\dist\Konvertor-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Konvertor-cli.exe --version: код $LASTEXITCODE" }
+          if (-not (Test-Path .\dist\Konvertor.exe)) { throw "Konvertor.exe не собран" }
+          Get-Item .\dist\Konvertor.exe, .\dist\Konvertor-cli.exe | Format-Table Name, Length
 
       - name: Упаковать в ZIP
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item -Force dist\Konvektor.exe package\
-          Copy-Item -Force dist\Konvektor-cli.exe package\
+          Copy-Item -Force dist\Konvertor.exe package\
+          Copy-Item -Force dist\Konvertor-cli.exe package\
           if (Test-Path README.md) { Copy-Item -Force README.md package\README.md }
-          Compress-Archive -Path package\* -DestinationPath Konvektor-windows.zip -Force
+          Compress-Archive -Path package\* -DestinationPath Konvertor-windows.zip -Force
 
       - name: Сохранить готовые файлы
         uses: actions/upload-artifact@v4
         with:
-          name: Konvektor-windows
+          name: Konvertor-windows
           path: |
-            dist/Konvektor.exe
-            dist/Konvektor-cli.exe
-            Konvektor-windows.zip
+            dist/Konvertor.exe
+            dist/Konvertor-cli.exe
+            Konvertor-windows.zip
           retention-days: 90
 
       - name: Опубликовать релиз (только для тегов v*)
@@ -113,15 +113,15 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'rc') }}
           make_latest: ${{ contains(github.ref_name, 'rc') && 'false' || 'legacy' }}
           files: |
-            dist/Konvektor.exe
-            dist/Konvektor-cli.exe
-            Konvektor-windows.zip
+            dist/Konvertor.exe
+            dist/Konvertor-cli.exe
+            Konvertor-windows.zip
           generate_release_notes: true
           body: |
             Готовые файлы для Windows:
 
-            * `Konvektor.exe` — оконная программа (просто запустить).
-            * `Konvektor-cli.exe` — консольная версия для пакетной обработки.
-            * `Konvektor-windows.zip` — оба файла + инструкция.
+            * `Konvertor.exe` — оконная программа (просто запустить).
+            * `Konvertor-cli.exe` — консольная версия для пакетной обработки.
+            * `Konvertor-windows.zip` — оба файла + инструкция.
 
-            Скачайте ZIP, распакуйте в любую папку и запустите `Konvektor.exe`.
+            Скачайте ZIP, распакуйте в любую папку и запустите `Konvertor.exe`.
