@@ -973,3 +973,45 @@ def test_select_all_is_reset_on_warehouse_change(gui, tmp_path):
     dialog.on_ok()
     assert app._source_required is False
     assert not app._sklad
+
+
+def test_chooser_shows_vedomost_article_and_barcode(gui, tmp_path):
+    """Коды в подсказке принадлежат самой предлагаемой строке ведомости."""
+    import openpyxl
+
+    app, _, _ = gui
+    path = _write_vedomost(tmp_path)
+    book = openpyxl.load_workbook(path)
+    sheet = book.active
+    sheet.cell(4, 9, "Штрихкод")
+    sheet.cell(5, 3, "ГАЗ-001")
+    sheet.cell(5, 9, "0481234567890")
+    book.save(path)
+    app.load_vedomost(path)
+    app.on_convert(MATCH_NAME)
+    _run(app)
+    row_id, stored = _row_with_doc(app, "Газ")
+    _click_cell(app, row_id, "▼")
+    matches = [(i, label, row) for i, (label, row) in enumerate(app._chooser.items)
+               if getattr(row, "article", "") == "ГАЗ-001"]
+    assert len(matches) == 1
+    index, label, row = matches[0]
+    assert "%" in label
+    assert "арт. ГАЗ-001" in label
+    assert "штрихкод 0481234567890" in label
+    assert row.nomenclature in label
+    _choose(app, index)
+    assert app._overrides[stored["key"]].barcode == "0481234567890"
+    assert app._overrides[stored["key"]].article == "ГАЗ-001"
+
+
+def test_chooser_marks_missing_codes(gui, tmp_path):
+    app, _, _ = gui
+    _open_vedomost_and_convert(app, tmp_path)
+    row_id, _ = _row_with_doc(app, "Газ")
+    _click_cell(app, row_id, "▼")
+    choices = [(label, row) for label, row in app._chooser.items
+               if getattr(row, "nomenclature", "").startswith("Газ")]
+    assert choices
+    assert "арт. —" in choices[0][0]
+    assert "штрихкод —" in choices[0][0]

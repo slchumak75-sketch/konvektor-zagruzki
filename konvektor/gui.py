@@ -1292,9 +1292,9 @@ class KonvektorApp(_Base):
 
         items = [("— не выбирать (новый товар) —", None)]
         for score, row in self._suggestions(entry):
-            label = f"{score:.0%} · {row.nomenclature}"
-            if row.article:
-                label += f" · арт. {row.article}"
+            # Коды перед названием: длинное наименование не скрывает их в списке.
+            label = (f"{score:.0%} · арт. {row.article or '—'} · "
+                     f"штрихкод {row.barcode or '—'} · {row.nomenclature}")
             items.append((label, row))
         items.append(("Своё название…", CHOICE_CUSTOM))
 
@@ -1306,14 +1306,17 @@ class KonvektorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             bbox = None
         x = y = 0
-        width = 460
+        width = 800
         if bbox:
             x = int(bbox[0])
             y = int(bbox[1] + bbox[3])
-            width = max(360, int(bbox[2]) + 60)
+            width = max(width, int(bbox[2]) + 60)
         try:
             left = self.preview.winfo_rootx() + x
             top = self.preview.winfo_rooty() + y
+            screen_width = self.preview.winfo_screenwidth()
+            width = min(width, screen_width)
+            left = max(0, min(left, screen_width - width))
         except Exception:  # noqa: BLE001 - не критично
             left = top = 100
         self._chooser_row = row_id
