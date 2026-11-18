@@ -348,6 +348,11 @@ class SourceDialog:
         try:
             for var in self.supplier_vars.values():
                 var.set(False)
+            # важно: supplier_var хранит итоговый список через запятую — его тоже сбросить
+            try:
+                self.supplier_var.set("")
+            except Exception:
+                pass
             # очистить поиск и показать всех
             self.supplier_search_var.set("")
             try:

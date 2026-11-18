@@ -110,7 +110,7 @@ def classify_header(value: Any) -> Optional[Tuple[str, float]]:
     if "штрих" in t or "barcode" in t or "ean" in t or "штрихкод" in t:
         return (BARCODE, 3.0)
 
-    if "артикул" in t or re.search(r"\bарт\b", t):
+    if "артикул" in t or "инвент" in t or re.search(r"\bарт\b", t):
         return (ARTICLE, 3.0)
 
     if "ставка" in t:

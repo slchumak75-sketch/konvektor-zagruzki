@@ -1,6 +1,6 @@
-"""Точка входа консольной версии — из неё собирается Konvektor-cli.exe.
+"""Точка входа консольной версии — из неё собирается Konvertor-cli.exe.
 
-PyInstaller: pyinstaller --onefile --console --name Konvektor-cli app_cli.py
+PyInstaller: pyinstaller --onefile --console --name Konvertor-cli app_cli.py
 """
 
 import sys

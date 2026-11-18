@@ -52,15 +52,15 @@ python -m konvektor.cli --selftest . --json
 ```bash
 pip install -r requirements-dev.txt
 
-pyinstaller --noconfirm --onefile --noconsole --name Konvektor \
+pyinstaller --noconfirm --onefile --noconsole --name Konvertor \
     --icon assets/konvektor.ico --add-data "assets/konvektor_icon.png;assets" app_gui.py
 
-pyinstaller --noconfirm --onefile --console --name Konvektor-cli \
+pyinstaller --noconfirm --onefile --console --name Konvertor-cli \
     --icon assets/konvektor.ico app_cli.py
 
-dist\Konvektor.exe            # оконная версия
-dist\Konvektor-cli.exe --selftest .
-dist\Konvektor-cli.exe --diagnose "файл.XLS"   # проверка режима разбора
+dist\Konvertor.exe            # оконная версия
+dist\Konvertor-cli.exe --selftest .
+dist\Konvertor-cli.exe --diagnose "файл.XLS"   # проверка режима разбора
 ```
 
 На Linux PyInstaller соберёт бинарник, но **не** `.exe` — Windows-сборка делается
@@ -87,11 +87,11 @@ dist\Konvektor-cli.exe --diagnose "файл.XLS"   # проверка режим
 1. **test** (Ubuntu): `pip install -r requirements-dev.txt`, `pytest`,
    `python -m konvektor.cli --selftest .`.
 2. **build-windows** (Windows): две сборки PyInstaller, проверка
-   `Konvektor-cli.exe --version` и `--selftest .` на образцах, артефакт
-   `Konvektor-windows` (оба `.exe` + ZIP), релиз на теге.
+   `Konvertor-cli.exe --version` и `--selftest .` на образцах, артефакт
+   `Konvertor-windows` (оба `.exe` + ZIP), релиз на теге.
 
 Забрать результат: **Actions** → нужный запуск → блок *Artifacts* →
-`Konvektor-windows`.
+`Konvertor-windows`.
 
 ### Как выпустить версию
 
@@ -101,12 +101,12 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-После этого в *Releases* появятся `Konvektor.exe`, `Konvektor-cli.exe`,
-`Konvektor-windows.zip`.
+После этого в *Releases* появятся `Konvertor.exe`, `Konvertor-cli.exe`,
+`Konvertor-windows.zip`.
 
 ## Отладка
 
-* `KONVEKTOR_DEBUG=1 Konvektor-cli.exe файл.xls -o out.xlsx` — печатать traceback
+* `KONVEKTOR_DEBUG=1 Konvertor-cli.exe файл.xls -o out.xlsx` — печатать traceback
   по нечитаемым файлам.
 * `--json` — компактный машинный итог (позиции, ошибки, предупреждения).
 * Лист «Сводка» в результате показывает, каким ридером и какие листы прочитаны,

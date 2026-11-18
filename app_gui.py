@@ -1,6 +1,6 @@
-"""Точка входа оконной версии — из неё собирается Konvektor.exe.
+"""Точка входа оконной версии — из неё собирается Konvertor.exe.
 
-PyInstaller: pyinstaller --onefile --noconsole --name Konvektor app_gui.py
+PyInstaller: pyinstaller --onefile --noconsole --name Konvertor app_gui.py
 """
 
 import sys
