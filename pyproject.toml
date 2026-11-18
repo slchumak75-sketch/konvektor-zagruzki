@@ -1,6 +1,6 @@
 [project]
 name = "konvektor-zagruzki"
-version = "1.8.0rc1"
+version = "1.9.25rc1"
 description = "Конвертер счетов, накладных и прайс-листов в единую Excel-таблицу по образцу"
 requires-python = ">=3.9"
 dependencies = ["xlrd>=2.0.1,<3", "openpyxl>=3.1,<4"]

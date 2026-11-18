@@ -27,7 +27,7 @@ import difflib
 import os
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .readers import read_source
@@ -55,10 +55,13 @@ MATCH_TITLES = OrderedDict(
 )
 
 #: Порядок подбора: выбранный ключ, затем остальные как запасные варианты.
+#: Если выбран штрихкод: 1-штрихкод 2-артикул 3-наименование.
+#: Если выбран артикул: 1-артикул 2-штрихкод 3-наименование.
+#: Если выбрано наименование: только наименование (без fallback).
 MATCH_ORDER = {
     MATCH_BARCODE: (MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME),
     MATCH_ARTICLE: (MATCH_ARTICLE, MATCH_BARCODE, MATCH_NAME),
-    MATCH_NAME: (MATCH_NAME, MATCH_ARTICLE, MATCH_BARCODE),
+    MATCH_NAME: (MATCH_NAME,),
 }
 
 #: Как в отчёте называется подбор, сделанный пользователем вручную.
@@ -107,12 +110,12 @@ _LEGAL_FORMS = {
 #: Заголовки колонок ведомости → роль.
 _ROLE_ALIASES = OrderedDict(
     [
-        ("warehouse", ("склад",)),
         ("nomenclature", ("номенклатура", "наименование", "название", "товар")),
-        ("article", ("артикул", "код", "артикул поставщика")),
-        ("barcode", ("штрихкод", "штрих код", "баркод", "ean", "штриховой код")),
+        ("article", ("артикул", "артикул поставщика")),
+        ("barcode", ("штрихкод", "штрих код", "код", "баркод", "ean", "штриховой код")),
         ("unit", ("ед", "единица", "единица измерения", "ед изм", "еденица")),
         ("supplier", ("последний поставщик", "поставщик", "контрагент")),
+        ("sklad", ("склад",)),
         ("group", ("группа номенклатуры", "группа", "категория", "вид номенклатуры")),
         ("stock", ("конечный остаток", "остаток", "количество")),
         ("price", ("цена последнего поставщика", "цена", "розничная цена")),
@@ -130,9 +133,16 @@ Override = Optional[object]
 
 
 # --------------------------------------------------------------------- тексты
+_JUNK_PARENS = re.compile(r"\([^)]*(?:страна|пр-в[ао]|произв|ввоз)[^)]*\)", re.IGNORECASE)
+_JUNK_BARCODE = re.compile(r"/\s*\d{8,14}\s*/|\b\d{8,14}\b")
+
+
 def norm_text(value: Any) -> str:
     """Привести текст к сравнимому виду: нижний регистр, без пунктуации и «ё»."""
-    s = to_text(value).lower().replace("ё", "е")
+    s = to_text(value)
+    s = _JUNK_PARENS.sub(" ", s)
+    s = _JUNK_BARCODE.sub(" ", s)
+    s = s.lower().replace("ё", "е")
     s = "".join(_LAT2CYR.get(ch, ch) for ch in s)
     s = _NON_WORD.sub(" ", s)
     return " ".join(s.split())
@@ -160,8 +170,17 @@ def norm_barcode(value: Any) -> str:
 
 
 def norm_article(value: Any) -> str:
-    """Артикул без пробелов/знаков: «01_0356659» → «010356659»."""
-    s = to_text(value).lower().replace("ё", "е")
+    """Артикул без пробелов/знаков: «01_0356659» → «0356659».
+
+    Для счетов поставщика «Кореличи (4).xls» артикулы имеют вид
+    ``01_0356659``, ``02_0311059`` — префикс до «_» это категория и при
+    сверке не учитывается (см. требование заказчика).
+    """
+    s = to_text(value)
+    # префикс до «_» не учитывается
+    if "_" in s:
+        s = s.split("_")[-1]
+    s = s.lower().replace("ё", "е")
     s = "".join(_LAT2CYR.get(ch, ch) for ch in s)
     return _NON_WORD.sub("", s)
 
@@ -241,11 +260,15 @@ def _score_words(
         score *= 0.55
 
     # главное слово (первое не числовое) должно совпасть: «Бачок для унитаза»
-    # и «Сиденье для унитаза» — разные товары, хотя слов общего много
+    # и «Сиденье для унитаза» — разные товары, хотя слов общего много.
+    # Но если почти все слова ведомости (cover_ved >= 0.85) уже есть в документе,
+    # значит в документе просто длинное описание («Средство родентицидное ...»).
     head_doc = next((t for t in doc_tokens if not t.isdigit()), "")
     head_ved = next((t for t in ved_tokens if not t.isdigit()), "")
-    if head_doc and head_ved and _token_pair(head_doc, head_ved) < 0.5:
+    if cover_ved < 0.75 and head_doc and head_ved and _token_pair(head_doc, head_ved) < 0.5:
         score *= 0.7
+    if cover_ved >= 0.75 and not (numbers_doc and numbers_ved and not (numbers_doc & numbers_ved)):
+        score = max(score, 0.85 * cover_ved)
 
     units = (norm_text(unit)[:2], norm_text(ved_unit)[:2])
     if units[0] and units[0] == units[1]:
@@ -275,13 +298,13 @@ class VedRow:
     barcode: str = ""
     unit: str = ""
     supplier: str = ""
+    sklad: str = ""
     group: str = ""
     stock: float = 0.0
     price: float = 0.0
     line: int = 0
     #: номер строки во внутреннем списке (для быстрых индексов)
     index: int = field(default=-1, repr=False, compare=False)
-    warehouse: str = ""
     _supplier_key: Optional[str] = field(default=None, repr=False, compare=False)
 
     @property
@@ -372,41 +395,6 @@ class Vedomost:
             names[key] = (name, number + 1)
         return sorted(names.values(), key=lambda item: (-item[1], item[0].lower()))
 
-    def for_selection(self, warehouse: str = "", suppliers: Sequence[str] = ()) -> "Vedomost":
-        """Независимый индекс только выбранного склада и поставщиков.
-
-        Пустой результат остаётся пустым: никогда не возвращаем позиции другого склада.
-        Копии строк не меняют индексы исходной ведомости и ручные решения.
-        """
-        def warehouse_key(value: str) -> str:
-            value = norm_text(value)
-            return value.removeprefix("склад ").strip()
-
-        wanted = warehouse_key(warehouse)
-        keys = {clean_text(name).casefold() for name in suppliers}
-        rows = [replace(row) for row in self.rows
-                if (not wanted or warehouse_key(row.warehouse) == wanted)
-                and (not keys or clean_text(row.supplier).casefold() in keys)]
-        return Vedomost(rows=rows, path=self.path, sheet=self.sheet,
-                        header_row=self.header_row, roles=self.roles,
-                        warnings=self.warnings).build_index()
-
-    def suppliers_of_warehouse(self, warehouse: str) -> List[Tuple[str, int]]:
-        # Для списка поставщиков индекс поиска строить не нужно.
-        def key(value: str) -> str:
-            return norm_text(value).removeprefix("склад ").strip()
-        wanted = key(warehouse)
-        names: Dict[str, Tuple[str, int]] = {}
-        for row in self.rows:
-            if wanted and key(row.warehouse) != wanted:
-                continue
-            supplier = clean_text(row.supplier)
-            if supplier:
-                supplier_id = supplier.casefold()
-                name, count = names.get(supplier_id, (supplier, 0))
-                names[supplier_id] = name, count + 1
-        return sorted(names.values(), key=lambda item: item[0].casefold())
-
     def rows_of_supplier(self, key: str) -> List[VedRow]:
         if not key:
             return []
@@ -470,7 +458,7 @@ class Vedomost:
         return self._by_name.get(norm_text(name))
 
     def candidates(
-        self, name: Any, supplier: str = "", limit: int = 40
+        self, name: Any, supplier: str = "", limit: int = 40, sklad: str = ""
     ) -> List[Tuple[float, VedRow]]:
         """Похожие позиции ведомости по названию: [(сходство, позиция), …].
 
@@ -495,9 +483,16 @@ class Vedomost:
         if not hits:
             return []
         doc_norm = norm_text(name)
+        sklad_l = sklad.strip().lower()
         scored: List[Tuple[float, VedRow]] = []
-        for i, _weight in sorted(hits.items(), key=lambda kv: -kv[1])[:600]:
+        checked = 0
+        for i, _weight in sorted(hits.items(), key=lambda kv: -kv[1]):
             row = self.rows[i]
+            if sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                continue
+            checked += 1
+            if checked > 600:
+                break
             score = _score_words(
                 doc_words, self._word_lists[i], doc_norm, self._norm_names[i], "", row.unit
             )
@@ -516,15 +511,22 @@ class Vedomost:
                 break
         return unique
 
-    def search(self, text: Any, supplier: str = "", limit: int = 200) -> List[VedRow]:
+    def search(
+        self, text: Any, supplier: str = "", limit: int = 200, sklad: str = ""
+    ) -> List[VedRow]:
         """Ручной поиск по ведомости: подстрока в названии или артикуле.
 
         Пустой запрос — первые позиции выбранного поставщика (чтобы список
         не был пустым и его можно было листать).
+        Склад фильтрует результат: показывается только номенклатура
+        того склада, куда грузится документ (см. требование заказчика).
         """
         query = norm_text(text)
+        sklad_l = sklad.strip().lower()
         scope = self.rows_of_supplier(supplier) if supplier else []
         rows: Sequence[VedRow] = scope if scope else self.rows
+        if sklad_l:
+            rows = [r for r in rows if not r.sklad or sklad_l in r.sklad.lower()]
         if not query:
             return list(rows)[:limit]
         query_article = norm_article(text)
@@ -538,27 +540,66 @@ class Vedomost:
                     break
         return result
 
+    def _sklad_ok(self, row_sklad: str, sklad: str) -> bool:
+        """Подходит ли склад строки под запрошенный (пустой запрос — любой)."""
+        if not sklad:
+            return True
+        if not row_sklad:
+            return True  # у позиции склад не указан — показываем везде
+        return sklad.strip().lower() in row_sklad.lower()
+
     def find(
-        self, name: Any, article: Any, barcode: Any, kind: str, supplier: str = ""
+        self, name: Any, article: Any, barcode: Any, kind: str, supplier: str = "", sklad: str = ""
     ) -> Optional[Tuple[VedRow, float]]:
         """Найти позицию по одному ключу: (позиция, сходство) или None."""
+        sklad_l = sklad.strip().lower()
         if kind == MATCH_BARCODE:
             code = norm_barcode(barcode)
             if not code:
                 return None
             row = self._lookup_barcode(code, supplier)
+            if row is not None and sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                row = next(
+                    (
+                        r
+                        for r in (self.rows_of_supplier(supplier) if supplier else self.rows)
+                        if norm_barcode(r.barcode) == code and (not r.sklad or sklad_l in r.sklad.lower())
+                    ),
+                    None,
+                )
             return (row, 1.0) if row is not None else None
         if kind == MATCH_ARTICLE:
             key = norm_article(article)
             if not key:
                 return None
             row = self._lookup_article(key, supplier)
+            if row is not None and sklad_l and row.sklad and sklad_l not in row.sklad.lower():
+                row = next(
+                    (
+                        r
+                        for r in (self.rows_of_supplier(supplier) if supplier else self.rows)
+                        if norm_article(r.article) == key and (not r.sklad or sklad_l in r.sklad.lower())
+                    ),
+                    None,
+                )
             return (row, 1.0) if row is not None else None
         # по наименованию: сначала точное совпадение, затем нечёткое
+        # Точное совпадение должно учитывать и склад — иначе при наличии
+        # одинаковой номенклатуры на «Мир» и «Кореличи» всегда брался бы
+        # первый (Мир) даже при выборе «Кореличи».
         exact = self.by_name(name)
-        if exact is not None and self._in_scope(exact, supplier):
+        if exact is not None and self._in_scope(exact, supplier) and self._sklad_ok(exact.sklad, sklad):
             return exact, 1.0
-        for score, row in self.candidates(name, supplier, limit=1):
+        # Если точное есть, но склад не тот — пробуем другие позиции
+        # того же названия на нужном складе (точное по кандидатам).
+        if exact is not None and self._in_scope(exact, supplier) and sklad_l and exact.sklad and sklad_l not in exact.sklad.lower():
+            for score, row in self.candidates(name, supplier, limit=1, sklad=sklad):
+                # candidates уже отфильтрован по складу и отсортирован
+                if norm_text(row.nomenclature) == norm_text(name):
+                    return row, 1.0
+                # если точного на этом складе нет — вернём лучшее нечёткое
+                return row, score
+        for score, row in self.candidates(name, supplier, limit=1, sklad=sklad):
             return row, score
         return None
 
@@ -643,18 +684,16 @@ def parse_vedomost(source: Any) -> Vedomost:
         )
 
     columns = {
-        "warehouse": roles.get("warehouse"),
         "nomenclature": roles.get("nomenclature"),
         "article": roles.get("article"),
         "barcode": roles.get("barcode"),
         "unit": roles.get("unit"),
         "supplier": roles.get("supplier"),
+        "sklad": roles.get("sklad"),
         "group": roles.get("group"),
         "stock": roles.get("stock"),
         "price": roles.get("price"),
     }
-    if columns["warehouse"] is None:
-        warnings.append("В ведомости нет колонки «Склад»: подбор по складу невозможен.")
     if columns["supplier"] is None:
         warnings.append(
             "в ведомости нет колонки «Последний поставщик» — сверка по поставщику "
@@ -681,12 +720,14 @@ def parse_vedomost(source: Any) -> Vedomost:
         rows.append(
             VedRow(
                 nomenclature=name,
-                warehouse=clean_text(_cell(raw, columns["warehouse"])),
                 article=article,
                 barcode=barcode,
                 unit=clean_text(_cell(raw, columns["unit"])),
                 supplier=clean_text(_cell(raw, columns["supplier"]))
                 if columns["supplier"] is not None
+                else "",
+                sklad=clean_text(_cell(raw, columns["sklad"]))
+                if columns.get("sklad") is not None
                 else "",
                 group=clean_text(_cell(raw, columns["group"]))
                 if columns["group"] is not None
@@ -772,7 +813,7 @@ class MatchEntry:
         if not self.matched:
             return "—"
         if self.how in (MATCH_BARCODE, MATCH_ARTICLE) and self.score >= 1.0:
-            return "точно"
+            return "ОК"
         if self.how == HOW_MANUAL:
             return HOW_MANUAL
         return f"{self.score:.0%}"
@@ -793,13 +834,13 @@ class Matcher:
         overrides: Optional[Dict[Tuple[str, str, int], "Override"]] = None,
         min_score: float = AUTO_SCORE,
         supplier: str = "",
-        all_suppliers: bool = False,
+        sklad: str = "",
     ) -> None:
-        self.all_suppliers = all_suppliers
         self.vedomost = vedomost
         self.strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
-        #: поставщик, выбранный пользователем в окне (пусто — берём из документа)
+        #: поставщик(и), выбранный(е) пользователем в окне (пусто — берём из документа)
         self.forced_supplier = clean_text(supplier)
+        self.sklad = clean_text(sklad).lower()
         self.overrides: Dict[Tuple[str, str, int], Optional[VedRow]] = dict(overrides or {})
         self.min_score = min_score
         self.entries: List[MatchEntry] = []
@@ -807,7 +848,20 @@ class Matcher:
         self._supplier_key = ""
         self._supplier_text = ""
         self._supplier_found = False
+        self._supplier_keys: List[str] = []
         self._file = ""
+
+    @staticmethod
+    def _split_supplier_names(text: str) -> List[str]:
+        """Разбить «ООО Ома, ООО ТД Комплект» → [«ООО Ома», «ООО ТД Комплект»]."""
+        if not text:
+            return []
+        parts = []
+        for chunk in text.replace(";", ",").split(","):
+            name = chunk.strip()
+            if name:
+                parts.append(name)
+        return parts or [text.strip()]
 
     # -------------------------------------------------------------- служебное
     def begin_file(self, path: str, supplier: str = "") -> None:
@@ -816,12 +870,36 @@ class Matcher:
         Поставщик, выбранный пользователем в окне, важнее найденного в
         документе: в счёте поставщик может быть не распознан или написан
         иначе, а ведомость знает правильное название.
+        Если выбрано несколько поставщиков — ищем среди всех их позиций,
+        но только их (чтобы не подставить товар чужого поставщика).
         """
         self._file = path
-        self._supplier_text = "" if self.all_suppliers else (self.forced_supplier or clean_text(supplier))
-        key, found = self.vedomost.supplier_group(self._supplier_text)
-        self._supplier_key = key
-        self._supplier_found = found
+        self._supplier_text = self.forced_supplier or clean_text(supplier)
+        names = self._split_supplier_names(self._supplier_text)
+        keys: List[str] = []
+        found_any = False
+        for name in names:
+            key, found = self.vedomost.supplier_group(name)
+            if found and key not in keys:
+                keys.append(key)
+                found_any = True
+        if keys:
+            # основной ключ — первый (для совместимости со старым кодом/тестами)
+            self._supplier_key = keys[0]
+            self._supplier_keys = keys
+            self._supplier_found = found_any
+        else:
+            # один поставщик не нашёлся — сохраняем как раньше (пустой ключ,
+            # found=False → подбор только вручную)
+            if names:
+                key, found = self.vedomost.supplier_group(self._supplier_text)
+                self._supplier_key = key
+                self._supplier_keys = [key] if key else []
+                self._supplier_found = found
+            else:
+                self._supplier_key = ""
+                self._supplier_keys = []
+                self._supplier_found = False
 
     @property
     def supplier_text(self) -> str:
@@ -830,6 +908,10 @@ class Matcher:
     @property
     def strategy_title(self) -> str:
         return MATCH_TITLES.get(self.strategy, MATCH_TITLES[MATCH_NAME])
+
+    @property
+    def supplier_keys(self) -> List[str]:
+        return list(self._supplier_keys or ([self._supplier_key] if self._supplier_key else []))
 
     @property
     def summary(self) -> Dict[str, Any]:
@@ -845,6 +927,7 @@ class Matcher:
             "supplier": self._supplier_text,
             "supplier_found": self._supplier_found,
             "supplier_key": self._supplier_key,
+            "supplier_keys": self.supplier_keys,
             "items": len(self.entries),
             "matched": len(matched),
             "barcode": counters[MATCH_BARCODE],
@@ -970,7 +1053,11 @@ class Matcher:
         # поставщика). Поставщика в ведомости нет — не подбираем вовсе: пусть
         # пользователь выберет вручную, чем получит неверное наименование.
         # Поставщик в документе вообще не распознан — ищем по всей ведомости.
-        if self._supplier_key:
+        # Если выбрано несколько поставщиков — ищем среди всех выбранных,
+        # но только их (склад фильтрует дополнительно).
+        if self._supplier_keys:
+            scopes = self._supplier_keys
+        elif self._supplier_key:
             scopes = [self._supplier_key]
         elif self._supplier_text:
             scopes = []
@@ -979,7 +1066,21 @@ class Matcher:
 
         for scope in scopes:
             for kind in MATCH_ORDER[self.strategy]:
-                found = self.vedomost.find(name, article, barcode, kind, scope)
+                found = self.vedomost.find(name, article, barcode, kind, scope, sklad=self.sklad)
+                # если на выбранном складе не нашлось — пробуем по всем складам
+                # того же поставщика (артикул един для товара, остаток может быть
+                # на другом складе; раньше автоподбор так и работал)
+                if found is None and self.sklad:
+                    found = self.vedomost.find(name, article, barcode, kind, scope, sklad="")
+                if (
+                    found is not None
+                    and self.sklad
+                    and found[0].sklad
+                    and self.sklad not in found[0].sklad.lower()
+                ):
+                    # на случай если find вернул точное без склада (старые записи)
+                    # — не отбрасываем, а оставляем, если другого варианта нет
+                    pass
                 if found is None:
                     continue
                 row, score = found

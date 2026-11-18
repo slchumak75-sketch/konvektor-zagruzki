@@ -64,8 +64,6 @@ Windows-программа (Python + tkinter + PyInstaller), которая пр
 | Пороги и оценка похожести названий | `konvektor/vedomost.py` | `similarity`, `AUTO_SCORE`, `CONFIDENT_SCORE`, `_token_pair` |
 | Выбор номенклатуры «▼» и правка названия | `konvektor/gui.py` | `open_chooser`, `_chooser_picked`, `edit_cell`, `commit_edit`, `_preview_values` |
 | Выпадающий список номенклатуры | `konvektor/pick.py` | `_VedChooser`, `CHOICE_CUSTOM` |
-| Фильтр склада и нескольких поставщиков | `konvektor/vedomost.py` | `for_selection`, `suppliers_of_warehouse`; отдельный индекс без утечки других строк |
-| Закреплённые поля и ширины | `konvektor/gui.py` | `preview`, `preview_right`, `save_field_widths`, `reset_field_widths` |
 | Склад и поставщик при выгрузке | `konvektor/pick.py`, `konvektor/gui.py` | `SourceDialog`, `ask_source`, `source_text` |
 | Папка `склад / поставщик / дата` | `konvektor/pipeline.py` | `output_path_for` (`sklad`, `supplier`), `ConvertOptions` |
 | Колонка «Новинка» в файле | `konvektor/writer.py`, `konvektor/vedomost.py` | `WorkbookPayload.with_novinka`, `_write_data_sheet`, `Item.novinka` |

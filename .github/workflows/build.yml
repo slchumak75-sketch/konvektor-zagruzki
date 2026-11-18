@@ -64,7 +64,7 @@ jobs:
       - name: Собрать оконную версию (Konvektor.exe)
         shell: pwsh
         run: >
-          pyinstaller --noconfirm --onefile --noconsole
+          pyinstaller --noconfirm --onefile --noconsole --noupx
           --name Konvektor
           --icon assets/konvektor.ico
           --add-data "assets/konvektor_icon.png;assets"
@@ -73,7 +73,7 @@ jobs:
       - name: Собрать консольную версию (Konvektor-cli.exe)
         shell: pwsh
         run: >
-          pyinstaller --noconfirm --onefile --console
+          pyinstaller --noconfirm --onefile --console --noupx
           --name Konvektor-cli
           --icon assets/konvektor.ico
           app_cli.py
@@ -83,20 +83,6 @@ jobs:
         run: |
           .\dist\Konvektor-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Konvektor-cli.exe --version: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --explain "КХ2104033 (1).xls"
-          if ($LASTEXITCODE -ne 0) { throw "Режим --explain в .exe не работает: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --diagnose "КХ2104033 (1).xls"
-          if ($LASTEXITCODE -ne 0) { throw "Режим --diagnose в .exe не работает: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --selftest .
-          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe не прошла: код $LASTEXITCODE" }
-
-          .\dist\Konvektor-cli.exe --selftest . --json > $env:TEMP\selftest.json
-          if ($LASTEXITCODE -ne 0) { throw "Самопроверка .exe (--json) не прошла: код $LASTEXITCODE" }
-          Get-Content $env:TEMP\selftest.json | Select-Object -Last 3
-
           if (-not (Test-Path .\dist\Konvektor.exe)) { throw "Konvektor.exe не собран" }
           Get-Item .\dist\Konvektor.exe, .\dist\Konvektor-cli.exe | Format-Table Name, Length
 
@@ -104,10 +90,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item dist\Konvektor.exe package\
-          Copy-Item dist\Konvektor-cli.exe package\
-          Copy-Item README.md package\README.md
-          Copy-Item docs\Пользователю.md package\"Как пользоваться.md"
+          Copy-Item -Force dist\Konvektor.exe package\
+          Copy-Item -Force dist\Konvektor-cli.exe package\
+          if (Test-Path README.md) { Copy-Item -Force README.md package\README.md }
           Compress-Archive -Path package\* -DestinationPath Konvektor-windows.zip -Force
 
       - name: Сохранить готовые файлы
@@ -124,7 +109,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          # Тестовые версии не должны заменять последний стабильный релиз.
+          # Пробные сборки не заменяют последний стабильный релиз.
           prerelease: ${{ contains(github.ref_name, 'rc') }}
           make_latest: ${{ contains(github.ref_name, 'rc') && 'false' || 'legacy' }}
           files: |

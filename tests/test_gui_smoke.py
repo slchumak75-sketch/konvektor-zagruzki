@@ -82,9 +82,9 @@ def test_window_builds_with_single_file(gui, known_paths):
     assert app.preview.widths["сумма с НДС"] <= 80
     assert app.preview.widths["ед. изм."] == 50
     # без ведомости лишние колонки скрыты — таблица как раньше
-    assert app.preview.options["displaycolumns"] == ["Штрихкод", "Артикул", "Из документа"]
-    assert app.preview_right.options["displaycolumns"] == [
-        "ед. изм.", "количество", "цена", "сумма", "ставка НДС", "сумма НДС", "сумма с НДС"
+    assert app.preview.options["displaycolumns"] == [
+        "Штрихкод", "Артикул", "Из документа", "ед. изм.", "количество", "цена",
+        "сумма", "ставка НДС", "сумма НДС", "сумма с НДС",
     ]
     # разлиновка: чередование строк настроено
     assert "odd" in app.preview.tags and "even" in app.preview.tags
@@ -286,6 +286,9 @@ def test_list_is_cleared_after_conversion(gui):
     app.out_var.set(r"D:\Итоги")
     app.on_convert()
     _run(app)
+    # файл остаётся в буфере до нажатия «Очистить таблицу»
+    assert len(app.files) == 1
+    app.on_clear_table()
     assert app.files == []
     assert app.file_var.get() == "файл не выбран"
     # путь сохранения — настройка, а не имя файла: он остаётся
@@ -485,7 +488,11 @@ def test_three_convert_buttons(gui):
     """Три кнопки конвертации: по штрихкоду, по артикулу, по наименованию."""
     app, module, _ = gui
     assert set(app.convert_buttons) == {MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME}
-    texts = [t for t in fake_tk.TEXTS if t.startswith("Конвертировать ")]
+    texts = [
+        t
+        for t in fake_tk.TEXTS
+        if t.startswith("Конвертировать ") and t != "Конвертировать ▾"
+    ]
     assert texts == [
         "Конвертировать по штрихкоду",
         "Конвертировать по артикулу",
@@ -799,12 +806,12 @@ def test_step_cards_use_compact_buttons(gui):
     texts = [str(record.get("text", "")) for record in fake_tk.RECORDS]
     assert "Выбрать файл…" in texts
     assert any("Загрузить ведомость" in text for text in texts)
-    assert "Обзор…" in texts
-    # все кнопки этих плашек — компактные
-    assert len(compact) >= 3
-    # мелкие подписи полей
-    small = [r for r in fake_tk.RECORDS if r.get("style") == "Small.TLabel"]
-    assert len(small) >= 3
+    assert "Папка сохранения…" in texts
+    # кнопки сгруппированы в выпадающие меню на синем заголовке
+    header_menus = [
+        record for record in fake_tk.RECORDS if record.get("style") in ("Header.TMenubutton", "HeaderPrimary.TMenubutton")
+    ]
+    assert len(header_menus) >= 3
 
 
 # -------------------------------------------- склад и поставщик (диалог 1.7.0)
@@ -822,21 +829,21 @@ def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
     dialogs.open_result = (path,)
     app.on_add_files()
     dialog = _dialog(app)
-    # склады заказчика
+    # склады заказчика — наглядные кнопки
     assert list(dialog.sklad_buttons) == ["Мир", "Кореличи"]
-    # Поставщики зависят от склада, возможен выбор нескольких.
-    assert 'ООО "ОМА"' in dialog.suppliers
-    assert 'ООО "ТД Комплект"' in dialog.suppliers
-    dialog.sklad_var.set("Кореличи")
-    dialog._change_sklad()
-    assert dialog.suppliers == []
-    dialog.sklad_var.set("Мир")
-    dialog._change_sklad()
-    dialog.select_all()
+    # в списке поставщиков — все поставщики ведомости по алфавиту (без «как в документе»)
+    values = list(dialog.supplier_checks)
+    assert 'ООО "ОМА"' in values
+    assert values == sorted(values, key=str.casefold)
+    assert not any(v.startswith("— как в документе") for v in values)
+
+    # выбор склада через наглядную кнопку
+    dialog._select_sklad("Кореличи")
+    dialog.supplier_vars['ООО "ОМА"'].set(True)
     dialog.on_ok()
-    assert app._sklad == "Мир"
-    assert app._supplier_choices == ['ООО "ОМА"', 'ООО "ТД Комплект"']
-    assert app.source_var.get() == 'Мир / ООО "ОМА", ООО "ТД Комплект"'
+    assert app._sklad == "Кореличи"
+    assert app._supplier_choice == 'ООО "ОМА"'
+    assert app.source_var.get() == 'Кореличи / ООО "ОМА"'
 
 
 def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
@@ -867,10 +874,9 @@ def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
 
 
 def test_source_line_is_visible_in_window(gui):
-    """Строка «Склад и поставщик» есть в окне и её можно изменить."""
+    """Пункт «Склад и поставщик…» есть в окне и его можно изменить."""
     app, _, _ = gui
-    assert "Склад и поставщик:" in fake_tk.TEXTS
-    assert "Изменить…" in fake_tk.TEXTS
+    assert "Склад и поставщик…" in fake_tk.TEXTS
     app._source_chosen("Кореличи", "")
     assert app.source_var.get() == "Кореличи / как в документе"
 
@@ -891,94 +897,8 @@ def known_sample_paths():
     return samples
 
 
-def test_multiple_selection_scope_and_output(gui, tmp_path):
+def test_chooser_shows_codes_before_long_name(gui, tmp_path):
     import openpyxl
-    app, _, _ = gui
-    path = _write_vedomost(tmp_path)
-    book = openpyxl.load_workbook(path)
-    book.active.append(["Склад Кореличи", "ГАЗ", "", "Газ Кореличи", "шт", 1, 2, 'ООО "ОМА"'])
-    book.active.append(["Склад Мир", "ГАЗ", "", "Газ чужой поставщик", "шт", 1, 2, 'ООО "Чужой"'])
-    book.save(path)
-    app.load_vedomost(path)
-    app._source_chosen("Мир", ['ООО "ТД Комплект"', 'ООО "ОМА"'])
-    app.on_convert(MATCH_NAME)
-    _run(app)
-    assert app._matcher.all_suppliers
-    assert {r.warehouse for r in app._matcher.vedomost.rows} == {"Склад Мир"}
-    assert {r.supplier for r in app._matcher.vedomost.rows} == {'ООО "ОМА"', 'ООО "ТД Комплект"'}
-    row_id, stored = _row_with_doc(app, "Газ")
-    app.open_chooser(row_id)
-    for _, row in app._chooser.items:
-        if getattr(row, "warehouse", None):
-            assert row.warehouse == "Склад Мир"
-            assert row.supplier in app._supplier_choices
-    assert "ООО ОМА, ООО ТД Комплект" in app._pending_result.planned_output
-    app._source_chosen("Кореличи", ['ООО "ОМА"'])
-    assert app._pending_result is None and not app._overrides
-
-
-def test_field_widths_persist_and_reset(gui, tmp_path, monkeypatch):
-    app, module, _ = gui
-    monkeypatch.setenv("APPDATA", str(tmp_path))
-    app.preview.column("Из документа", width=222)
-    app.preview_right.column("цена", width=91)
-    app.save_field_widths()
-    app.preview.column("Из документа", width=111)
-    app.preview_right.column("цена", width=45)
-    app._load_field_widths()
-    assert app.preview.column("Из документа", "width") == 222
-    assert app.preview_right.column("цена", "width") == 91
-    app.reset_field_widths()
-    assert app.preview.column("Из документа", "width") == module.PREVIEW_WIDTHS[2]
-    assert not (tmp_path / "Konvektor" / "view.json").exists()
-
-
-def test_split_tables_have_synchronized_rows(gui, tmp_path):
-    app, module, _ = gui
-    _open_vedomost_and_convert(app, tmp_path)
-    assert app.preview.options["displaycolumns"] == module.PREVIEW_COLUMNS[:6]
-    assert app.preview_right.options["displaycolumns"] == module.PREVIEW_COLUMNS[6:]
-    assert app.preview.rows == app.preview_right.rows
-    row_id, stored = _row_with_doc(app, "Газ")
-    app._overrides[stored["key"]] = "новое название"
-    app._refresh_row(row_id, stored)
-    assert app.preview.item(row_id)["values"] == app.preview_right.item(row_id)["values"]
-
-
-def test_cancel_source_dialog_requires_new_selection(gui):
-    app, _, dialogs = gui
-    app._source_chosen("Мир", ["Старый поставщик"])
-    dialogs.open_result = (str(next(iter(known_sample_paths()))),)
-    app.on_add_files()
-    app._source_dialog.on_cancel()
-    assert app._source_required
-    app.on_convert()
-    assert app._worker is None
-    assert any(call[0] == "showwarning" and "Выберите склад" in str(call[1])
-               for call in dialogs.calls)
-    app._source_chosen("Кореличи", [])
-    assert not app._source_required
-
-
-def test_select_all_is_reset_on_warehouse_change(gui, tmp_path):
-    app, _, _ = gui
-    app.load_vedomost(_write_vedomost(tmp_path))
-    app.ask_source()
-    dialog = app._source_dialog
-    dialog.select_all()
-    assert len(dialog.supplier_value) == 2
-    dialog.sklad_var.set("Кореличи")
-    dialog._change_sklad()
-    assert dialog.supplier_value == []
-    dialog.on_ok()
-    assert app._source_required is False
-    assert not app._sklad
-
-
-def test_chooser_shows_vedomost_article_and_barcode(gui, tmp_path):
-    """Коды в подсказке принадлежат самой предлагаемой строке ведомости."""
-    import openpyxl
-
     app, _, _ = gui
     path = _write_vedomost(tmp_path)
     book = openpyxl.load_workbook(path)
@@ -987,7 +907,7 @@ def test_chooser_shows_vedomost_article_and_barcode(gui, tmp_path):
     sheet.cell(5, 3, "ГАЗ-001")
     sheet.cell(5, 9, "0481234567890")
     book.save(path)
-    app.load_vedomost(path)
+    assert app.load_vedomost(path)
     app.on_convert(MATCH_NAME)
     _run(app)
     row_id, stored = _row_with_doc(app, "Газ")
@@ -996,22 +916,35 @@ def test_chooser_shows_vedomost_article_and_barcode(gui, tmp_path):
                if getattr(row, "article", "") == "ГАЗ-001"]
     assert len(matches) == 1
     index, label, row = matches[0]
-    assert "%" in label
-    assert "арт. ГАЗ-001" in label
-    assert "штрихкод 0481234567890" in label
-    assert row.nomenclature in label
+    assert label.index("арт. ГАЗ-001") < label.index(row.nomenclature)
+    assert label.index("штрихкод 0481234567890") < label.index(row.nomenclature)
     _choose(app, index)
     assert app._overrides[stored["key"]].barcode == "0481234567890"
     assert app._overrides[stored["key"]].article == "ГАЗ-001"
 
 
-def test_chooser_marks_missing_codes(gui, tmp_path):
+def test_chooser_missing_codes_are_explicit(gui, tmp_path):
     app, _, _ = gui
     _open_vedomost_and_convert(app, tmp_path)
     row_id, _ = _row_with_doc(app, "Газ")
     _click_cell(app, row_id, "▼")
-    choices = [(label, row) for label, row in app._chooser.items
+    choices = [label for label, row in app._chooser.items
                if getattr(row, "nomenclature", "").startswith("Газ")]
-    assert choices
-    assert "арт. —" in choices[0][0]
-    assert "штрихкод —" in choices[0][0]
+    assert choices and "арт. —" in choices[0] and "штрихкод —" in choices[0]
+
+
+def test_chooser_uses_codes_from_real_vedomost(gui):
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "Ведомость 16.11.2026 (ОК).xlsx"
+    if not path.exists():
+        pytest.skip("нет примера ведомости")
+    app, _, _ = gui
+    assert app.load_vedomost(str(path))
+    app._source_chosen("Мир", 'ООО"Ома"')
+    app.on_convert(MATCH_NAME)
+    _run(app)
+    row_id, _ = _row_with_doc(app, "Газ")
+    _click_cell(app, row_id, "▼")
+    labels = [label for label, row in app._chooser.items if getattr(row, "article", "") == "0356659"]
+    assert labels and "штрихкод 4813426172277" in labels[0]
+    assert "арт. 0356659" in labels[0]

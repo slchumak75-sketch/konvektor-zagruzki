@@ -82,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--supplier",
         metavar="ИМЯ",
-        action="append", default=[],
-        help="поставщик для папки и сверки; можно указать несколько раз",
+        default="",
+        help="поставщик для папки и сверки (по умолчанию — как в документе)",
     )
     p.add_argument("--strict", action="store_true", help="вернуть код 3, если найдены расхождения в суммах")
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
@@ -157,10 +157,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except ValueError as exc:
             print("ОШИБКА ведомости: " + str(exc), file=sys.stderr)
             return 2
-        choices = sorted(set(args.supplier), key=str.casefold)
-        scoped = vedomost.for_selection(args.sklad, choices) if args.sklad or choices else vedomost
-        matcher = Matcher(scoped, args.match, supplier=choices[0] if len(choices) == 1 else "",
-                          all_suppliers=len(choices) > 1)
+        matcher = Matcher(vedomost, args.match, supplier=args.supplier)
         log(
             f"ведомость: {os.path.basename(args.vedomost)} — позиций {vedomost.count}, "
             f"поставщиков {len(vedomost.suppliers)}; сверка {MATCH_TITLES[matcher.strategy]}"
@@ -175,7 +172,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         add_source_columns=args.source_columns,
         matcher=matcher,
         sklad=args.sklad,
-        supplier=", ".join(sorted(set(args.supplier), key=str.casefold)),
+        supplier=args.supplier,
     )
     result = convert(files, "", options, log=log, recursive=args.recursive)
 

@@ -162,24 +162,3 @@ def test_cli_bad_vedomost_is_reported(known_paths, tmp_path, capsys):
     junk.write_text("не ведомость", encoding="utf-8")
     assert main([str(path), "-o", str(tmp_path), "--vedomost", str(junk), "-q"]) == 2
     assert "ОШИБКА ведомости" in capsys.readouterr().err
-
-
-def test_cli_multiple_suppliers_and_warehouse_scope(known_paths, tmp_path, capsys):
-    import openpyxl
-    path = _known(known_paths, "Кореличи")
-    if path is None:
-        pytest.skip("нет файла-образца")
-    ved = _write_vedomost(tmp_path)
-    book = openpyxl.load_workbook(ved)
-    book.active.append(["Склад Мир", "ГАЗ", "", "Газ дополнительный", "шт", 1, 2, 'ООО "Бета"'])
-    book.active.append(["Склад Кореличи", "ГАЗ", "", "Газ чужой склад", "шт", 1, 2, 'ООО "ОМА"'])
-    book.save(ved)
-    out = tmp_path / "итог"
-    assert main([str(path), "-o", str(out), "--vedomost", str(ved), "--sklad", "Мир",
-                 "--supplier", 'ООО "ОМА"', "--supplier", 'ООО "Бета"', "--json", "-q"]) == 0
-    result = _first_json(capsys.readouterr().out)
-    assert "ООО Бета, ООО ОМА" in result["outputs"][0]
-    assert result["match"]["matched"] >= 1
-    sheet = openpyxl.load_workbook(result["outputs"][0])["Данные"]
-    names = [row[2] for row in sheet.iter_rows(min_row=2, values_only=True)]
-    assert "Газ чужой склад" not in names

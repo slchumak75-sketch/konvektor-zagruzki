@@ -53,6 +53,9 @@ class Widget:
     def rowconfigure(self, *a, **k):
         return None
 
+    def __setitem__(self, key, value):
+        self.options[key] = value
+
     def configure(self, *a, **k):
         self.options.update(k)
         return None
@@ -214,7 +217,6 @@ class Listbox(Widget):
     def delete(self, first, last=None):
         if first == 0 and last == "end":
             self.items.clear()
-            self._selection = ()
         elif isinstance(first, int):
             if first < len(self.items):
                 del self.items[first]
@@ -230,15 +232,8 @@ class Listbox(Widget):
     def curselection(self):
         return self._selection
 
-    def selection_set(self, idx, last=None):
-        if self.options.get("selectmode") == "multiple":
-            end = len(self.items) - 1 if last == "end" else (last if last is not None else idx)
-            self._selection = tuple(sorted(set(self._selection) | set(range(idx, end + 1))))
-        else:
-            self._selection = (idx,)
-
-    def selection_clear(self, first, last=None):
-        self._selection = ()
+    def selection_set(self, idx):
+        self._selection = (idx,)
 
     def see(self, *a):
         return None
@@ -330,15 +325,13 @@ class Treeview(Widget):
     def heading(self, column, **k):
         self.headings[column] = k.get("text", "")
 
-    def column(self, column, *args, **k):
+    def column(self, column, **k):
         if "width" in k:
             self.widths[column] = k["width"]
-        if args and args[0] == "width":
-            return self.widths.get(column, 0)
 
     def insert(self, parent, index, values=None, **k):
         self._next_id += 1
-        row_id = k.get("iid") or f"I{self._next_id:03d}"
+        row_id = f"I{self._next_id:03d}"
         self.rows.append((row_id, tuple(values or ())))
         self.last_tags = tuple(k.get("tags") or ())
         return row_id
@@ -357,12 +350,6 @@ class Treeview(Widget):
     config = configure
 
     def yview(self, *a):
-        return None
-
-    def yview_moveto(self, *a):
-        return None
-
-    def xview_scroll(self, *a):
         return None
 
     def xview(self, *a):
@@ -550,6 +537,42 @@ def install() -> types.ModuleType:
                 TEXTS.append(str(k["text"]))
             RECORDS.append(dict(k))
 
+    class Menu(Widget):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.items: List[Dict[str, object]] = []
+
+        def add_command(self, **k):
+            self.items.append(dict(k))
+            if "label" in k:
+                TEXTS.append(str(k["label"]))
+                RECORDS.append({"text": str(k["label"]), **k})
+
+        def add_separator(self):
+            self.items.append({"separator": True})
+
+        def entryconfigure(self, index: int, **k):
+            if 0 <= index < len(self.items):
+                self.items[index].update(k)
+
+        def entrycget(self, index: int, key: str):
+            if 0 <= index < len(self.items):
+                return self.items[index].get(key)
+            return None
+
+    class Canvas(Widget):
+        def create_window(self, *a, **k):
+            return 1
+
+        def yview(self, *a, **k):
+            return (0.0, 1.0)
+
+        def bbox(self, *a, **k):
+            return (0, 0, 100, 100)
+
+    tk.Menu = Menu
+    tk.Canvas = Canvas
+
     TEXTS.clear()
     RECORDS.clear()
     for name in (
@@ -557,6 +580,7 @@ def install() -> types.ModuleType:
         "Label",
         "LabelFrame",
         "Button",
+        "Menubutton",
         "Entry",
         "Checkbutton",
         "Radiobutton",

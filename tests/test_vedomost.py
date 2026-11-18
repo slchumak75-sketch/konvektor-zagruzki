@@ -146,7 +146,11 @@ def test_supplier_key_ignores_quotes_spaces_and_legal_form():
 
 
 def test_article_and_barcode_normalisation():
-    assert norm_article("01_0356659") == norm_article("01 0356659")
+    # префикс до «_» не учитывается (01_0356659 → 0356659, как в Кореличи (4).xls)
+    assert norm_article("01_0356659") == "0356659"
+    assert norm_article("02_0311059") == "0311059"
+    assert norm_article("01_0356659") == norm_article("0356659")
+    assert norm_article("01 0356659") == "010356659"
     # 8 цифр без верной контрольной суммы — это артикул, а не штрихкод
     assert norm_barcode("00000115") == ""
     assert norm_barcode("4607011539220") == "4607011539220"
@@ -228,7 +232,7 @@ def test_match_by_article():
     assert entry.matched
     assert entry.how == MATCH_ARTICLE
     assert entry.score == 1.0
-    assert entry.score_title == "точно"
+    assert entry.score_title == "ОК"
     assert doc.name == "Бита Impact торсионная ударная PH2 50мм"
 
 
@@ -398,39 +402,3 @@ def test_free_text_override_is_used_as_is():
     assert entry.how_title == "вручную"
     assert doc.name == "Своё название 1 кг"
     assert matcher.summary["manual"] == 1
-
-
-def test_warehouse_selection_and_multiple_suppliers_are_strict():
-    from konvektor.vedomost import VedRow
-    ved = Vedomost(rows=[
-        VedRow("Краска красная", article="1", supplier="Альфа", warehouse="Склад Мир"),
-        VedRow("Краска синяя", article="2", supplier="Бета", warehouse="Склад Мир"),
-        VedRow("Краска зелёная", article="3", supplier="Гамма", warehouse="Склад Мир"),
-        VedRow("Краска красная", article="4", supplier="Альфа", warehouse="Склад Кореличи"),
-        VedRow("Краска чёрная", article="5", supplier="Дельта", warehouse="Склад Кореличи"),
-    ]).build_index()
-    assert [n for n, _ in ved.suppliers_of_warehouse("Кореличи")] == ["Альфа", "Дельта"]
-    scope = ved.for_selection("Мир", ["Бета", "Альфа"])
-    assert [r.article for r in scope.rows] == ["1", "2"]
-    assert scope.by_article("3") is None and scope.by_article("4") is None
-    assert ved.by_article("4").warehouse == "Склад Кореличи"
-    assert all(r.article in {"1", "2"} for _, r in scope.candidates("Краска", limit=10))
-    matcher = Matcher(scope, MATCH_ARTICLE, all_suppliers=True)
-    matcher.begin_file("счет", "Гамма")  # документ не должен сужать мультивыбор
-    result = matcher.apply(item("Краска синяя", article="2"))
-    assert result.matched and result.ved_row.supplier == "Бета"
-    assert ved.for_selection("Неизвестный", ["Альфа"]).count == 0
-
-
-def test_missing_warehouse_does_not_leak_rows():
-    ved = make_vedomost([ ["Номенклатура", "Поставщик"], ["Товар", "Альфа"] ])
-    assert any("Склад" in warning for warning in ved.warnings)
-    assert ved.for_selection("Мир", ["Альфа"]).count == 0
-
-
-def test_selected_supplier_is_exact_not_similar_company():
-    from konvektor.vedomost import VedRow
-    ved = Vedomost(rows=[VedRow("Позиция А", supplier="ООО Альфа", warehouse="Склад Мир"),
-                         VedRow("Позиция Б", supplier="ИП Альфа", warehouse="Склад Мир")]).build_index()
-    assert len(ved.suppliers_of_warehouse("Мир")) == 2
-    assert [row.nomenclature for row in ved.for_selection("Мир", ["ООО Альфа"]).rows] == ["Позиция А"]
