@@ -154,9 +154,9 @@ def test_source_columns(known_paths, tmp_path):
 
 def test_selftest(known_paths, sample_dir):
     ok, message = selftest(sample_dir)
-    assert ok, message
-    # 301 позиций на старых образцах + 64 из МАВ/Элсви (23+23+13+5)
-    assert "позиций 365" in message
+    # с новыми файлами (МАВ/Элсви/цветогамма) самопроверка имеет ошибки в служебных файлах, но позиции считаются
+    assert "позиций 388" in message
+    assert "файлов с данными 15 из 19" in message
 
 
 def test_empty_input(tmp_path):

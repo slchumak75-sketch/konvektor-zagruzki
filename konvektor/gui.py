@@ -560,13 +560,13 @@ class KonvertorApp(_Base):
                 background=CARD,
                 fieldbackground=CARD,
                 foreground=TEXT,
-                rowheight=24,
+                rowheight=29,
                 borderwidth=1,
                 bordercolor=BORDER,
                 lightcolor=BORDER,
                 darkcolor=BORDER,
                 relief="solid",
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 11),
             )
             style.configure(
                 "Grid.Treeview.Cell",
@@ -1317,21 +1317,42 @@ class KonvertorApp(_Base):
         """Если штрихкод/артикул совпал полностью, а имя ниже порога X — подсветить."""
         try:
             entry = self._entry_for(stored["key"])
-            if entry is None or not entry.matched:
-                return False
-            # ручной оверрайд уже подсвечен как manual — не мешаем
             if stored["key"] in self._overrides:
                 return False
             item = stored.get("item")
-            row = getattr(entry, "row", None) or getattr(entry, "ved_row", None)
-            if item is None or row is None:
+            if item is None:
                 return False
-            # проверка полного совпадения по штрихкоду/артикулу
+            # ищем ведомостную строку: либо из entry, либо точный поиск по ведомости
+            row = None
+            if entry is not None:
+                row = getattr(entry, "row", None) or getattr(entry, "ved_row", None)
+                # если нет совпадения, но есть точный штрихкод/артикул в ведомости — найдём его
+                if row is None and self._vedomost is not None:
+                    doc_barcode = str(getattr(item, "barcode", "") or "").strip()
+                    doc_article = str(getattr(item, "article", "") or "").strip()
+                    def norm_code(s: str) -> str:
+                        return "".join(ch for ch in s if ch.isalnum()).lower()
+                    # поиск точного штрихкода/артикула в ведомости
+                    for cand_row in getattr(self._vedomost, "rows", []) or []:
+                        if doc_barcode and cand_row.barcode and norm_code(doc_barcode) == norm_code(cand_row.barcode):
+                            row = cand_row
+                            break
+                        if doc_article and cand_row.article and norm_code(doc_article) == norm_code(cand_row.article):
+                            row = cand_row
+                            break
+                if entry is None or (not getattr(entry, "matched", False) and row is None):
+                    # нет строки для сравнения — нечего подсвечивать
+                    # но если нашли row через точный поиск, продолжаем
+                    if row is None:
+                        return False
+            else:
+                return False
+            if row is None:
+                return False
             doc_barcode = str(getattr(item, "barcode", "") or "").strip()
             doc_article = str(getattr(item, "article", "") or "").strip()
             ved_barcode = str(getattr(row, "barcode", "") or "").strip()
             ved_article = str(getattr(row, "article", "") or "").strip()
-            # нормализация: убрать пробелы, сравнить без регистра
             def norm_code(s: str) -> str:
                 return "".join(ch for ch in s if ch.isalnum()).lower()
             has_exact = False
@@ -1341,9 +1362,8 @@ class KonvertorApp(_Base):
                 has_exact = True
             if not has_exact:
                 return False
-            # считаем сходство имён по уже существующему алгоритму
             doc_name = str(getattr(entry, "doc_name", "") or getattr(item, "name", "") or "")
-            ved_name = str(getattr(row, "nomenclature", "") or getattr(entry, "name", "") or "")
+            ved_name = str(getattr(row, "nomenclature", "") or getattr(entry, "name", "") or getattr(row, "nomenclature", "") or "")
             try:
                 from .vedomost import similarity
                 score = similarity(doc_name, ved_name)
