@@ -190,6 +190,13 @@ class SourceDialog:
             self.supplier_search_entry.grid(row=0, column=1, sticky="ew")
             self.search_count_label = tk.Label(search_frame, text="", background=BG, foreground=MUTED, font=("Segoe UI", 8))
             self.search_count_label.grid(row=0, column=2, padx=(8, 0))
+            # крестик для очистки выбранных поставщиков (для следующей загрузки)
+            self.clear_supplier_btn = ttk.Button(search_frame, text="✕", width=3, style="Pick.Tool.TButton", command=self._clear_supplier_selection)
+            self.clear_supplier_btn.grid(row=0, column=3, padx=(6, 0))
+            try:
+                self.clear_supplier_btn.configure(cursor="hand2")
+            except Exception:
+                pass
             self._search_placeholder = "Поиск поставщика…"
             self._search_has_placeholder = True
             self.supplier_search_entry.insert(0, self._search_placeholder)
@@ -336,6 +343,24 @@ class SourceDialog:
         except Exception:
             pass
 
+    def _clear_supplier_selection(self) -> None:
+        """Сбросить выбранных поставщиков — для следующей загрузки."""
+        try:
+            for var in self.supplier_vars.values():
+                var.set(False)
+            # очистить поиск и показать всех
+            self.supplier_search_var.set("")
+            try:
+                self.supplier_search_entry.delete(0, "end")
+                self.supplier_search_entry.insert(0, self._search_placeholder)
+                self.supplier_search_entry.configure(foreground=MUTED)
+                self._search_has_placeholder = True
+            except Exception:
+                pass
+            self._apply_supplier_filter("")
+        except Exception:
+            pass
+
     def _select_sklad(self, name: str) -> None:
         """Наглядный выбор склада — подсветка активной кнопки."""
         self.sklad_var.set(name)
@@ -417,16 +442,20 @@ def install_styles(style) -> None:
         style.configure("Sklad.TRadiobutton", font=("Segoe UI", 10), padding=(8, 4))
         style.configure("Supplier.TCheckbutton", font=("Segoe UI", 11), padding=(2, 1))
         style.configure("Pick.Search.TEntry", fieldbackground="#FFFFFF", padding=(8, 6))
+        style.configure("Pick.Tool.TButton", font=("Segoe UI", 9), padding=(4, 2))
         style.configure("Chooser.Toplevel", background=CARD)
         style.configure("Chooser.TLabel", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 8))
         style.configure("Chooser.TButton", font=("Segoe UI", 9), padding=(6, 3))
         style.configure("Chooser.Search.TEntry", fieldbackground="#FFFFFF", padding=(8, 6))
+        style.configure("Chooser.Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT, rowheight=22, font=("Segoe UI", 9))
+        style.configure("Chooser.Treeview.Heading", background=BG_SOFT, foreground=NAVY, font=("Segoe UI", 8, "bold"))
+        style.map("Chooser.Treeview", background=[("selected", "#EFF6FF")], foreground=[("selected", NAVY)])
     except Exception:  # noqa: BLE001 - оформление не критично
         pass
 
 
 class _VedChooser:
-    """Выпадающий список номенклатуры под ячейкой «Из ведомости»."""
+    """Выпадающий список номенклатуры под ячейкой «Из ведомости» — таблицей."""
 
     def __init__(self, app, x: int, y: int, width: int, items, on_pick) -> None:
         self.app = app
@@ -437,13 +466,12 @@ class _VedChooser:
         try:
             self.win.overrideredirect(True)
             self.win.configure(background=BORDER, bd=1, relief="solid")
-        except Exception:  # noqa: BLE001 - не критично
+        except Exception:
             pass
         try:
             self.win.configure(background=CARD)
-        except Exception:  # noqa: BLE001 - не критично
+        except Exception:
             pass
-        # на всю высоту экрана — строго
         try:
             screen_h = app.winfo_screenheight() if hasattr(app, "winfo_screenheight") else 800
             max_h = max(400, screen_h - y - 40) if screen_h else 600
@@ -452,10 +480,13 @@ class _VedChooser:
             height = min(600, 28 * len(self.items) + 64)
         try:
             popup_w = max(int(width), 640)
+            # расширили чтобы столбики читались отдельно
+            popup_w = max(popup_w, 760)
             self.win.geometry(f"{popup_w}x{int(height)}+{int(x)}+{int(y)}")
-        except Exception:  # noqa: BLE001 - не критично
+        except Exception:
             pass
 
+        # поиск
         try:
             search_row = tk.Frame(self.win, background="#F8FAFC", highlightbackground=BORDER, highlightthickness=1)
             search_row.pack(fill="x", padx=8, pady=(8, 6))
@@ -469,40 +500,159 @@ class _VedChooser:
         except Exception:
             self.search_var = None
 
-        self.box = tk.Listbox(
-            self.win,
-            activestyle="none",
-            borderwidth=0,
-            relief="flat",
-            highlightthickness=0,
-            exportselection=False,
-            font=("Segoe UI", 10),
-            selectbackground="#EFF6FF",
-            selectforeground=NAVY,
-            background=CARD,
-            foreground=TEXT,
-        )
-        for label, _value in self.items:
-            self.box.insert("end", label)
-        self.box.pack(fill="both", expand=True, padx=8, pady=(2, 4))
-        if self.items:
-            self.box.selection_set(0)
+        # Таблица в 4 столбика: штрихкод | артикул | % | наименование — без слов "штрихкод"/"арт."
+        self._is_tree = False
+        self._tree_to_index = {}
+        try:
+            cols = ("barcode", "article", "percent", "name")
+            self.tree = ttk.Treeview(self.win, columns=cols, show="headings", height=12, style="Chooser.Treeview")
+            self.tree.heading("barcode", text="Штрихкод", anchor="center")
+            self.tree.heading("article", text="Артикул", anchor="center")
+            self.tree.heading("percent", text="%", anchor="center")
+            self.tree.heading("name", text="Наименование", anchor="w")
+            self.tree.column("barcode", width=130, minwidth=110, anchor="center", stretch=False)
+            self.tree.column("article", width=110, minwidth=90, anchor="center", stretch=False)
+            self.tree.column("percent", width=60, minwidth=50, anchor="center", stretch=False)
+            self.tree.column("name", width=400, minwidth=200, anchor="w", stretch=True)
+            # скролл
+            vsb = ttk.Scrollbar(self.win, orient="vertical", command=self.tree.yview)
+            self.tree.configure(yscrollcommand=vsb.set)
+            self.tree.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=(2, 4))
+            vsb.pack(side="right", fill="y", pady=(2, 4), padx=(0, 8))
+            # заполнение
+            for label, val in self.items:
+                if val is None:
+                    # не выбирать
+                    vals = ("", "", "—", label)
+                elif val is CHOICE_CUSTOM:
+                    vals = ("", "", "", label)
+                else:
+                    # row is VedRow
+                    try:
+                        vals = (getattr(val, "barcode", "") or "", getattr(val, "article", "") or "", label.split(" · ")[0] if " · " in label else "", getattr(val, "nomenclature", "") or label)
+                        # label already contains percent as first part when we built in gui.py: percent is first after split? Actually gui builds as barcode·article·percent·name, but we have old label with percent first. For tree we need percent separately.
+                        # For backward compat, extract percent from label if possible
+                        # label format from gui 1.9.25: "штрихкод X · арт. Y · 79% · Name" — percent is third part
+                        # So find part containing %
+                        pct = ""
+                        for part in label.split(" · "):
+                            if "%" in part or part.strip() == "—":
+                                pct = part
+                                break
+                        if not pct and " · " in label:
+                            pct = label.split(" · ")[0]
+                        # name is last part
+                        name = label.split(" · ")[-1] if " · " in label else label
+                        # override with actual row data for name
+                        name = getattr(val, "nomenclature", name)
+                        vals = (getattr(val, "barcode", "") or "", getattr(val, "article", "") or "", pct, name)
+                    except Exception:
+                        vals = ("", "", "", label)
+                iid = self.tree.insert("", "end", values=vals)
+                self._tree_to_index[iid] = len(self._tree_to_index)
+            # alias для тестов (box)
+            self.box = self.tree
+            self._is_tree = True
+            # для совместимости с тестами: curselection должен вернуть индекс
+            # добавим методы
+            orig_curselection = getattr(self.tree, "curselection", None)
+            def _curselection():
+                sel = self.tree.selection()
+                if not sel:
+                    return ()
+                # map tree iid to index in self.items
+                idx = self._tree_to_index.get(sel[0])
+                return (idx,) if idx is not None else ()
+            self.tree.curselection = _curselection  # type: ignore
+            def _selection_set(idx):
+                # idx is row index in current filtered items
+                try:
+                    children = self.tree.get_children()
+                    if 0 <= idx < len(children):
+                        iid = children[idx]
+                        self.tree.selection_set(iid)
+                        self.tree.see(iid)
+                        self.tree.focus(iid)
+                except Exception:
+                    pass
+            self.tree.selection_set = _selection_set  # type: ignore
+            def _delete(first, last=None):
+                # for search: delete all
+                try:
+                    for iid in self.tree.get_children():
+                        self.tree.delete(iid)
+                except Exception:
+                    pass
+                self._tree_to_index.clear()
+            self.tree.delete = _delete  # type: ignore
+            def _insert(index, element):
+                # not used for tree but for compatibility
+                try:
+                    vals = ("", "", "", str(element))
+                    iid = self.tree.insert("", "end", values=vals)
+                    self._tree_to_index[iid] = len(self._tree_to_index)
+                except Exception:
+                    pass
+            # keep original insert for search fallback
+            self._orig_tree_insert = self.tree.insert
+            # select first
+            if self.tree.get_children():
+                first = self.tree.get_children()[0]
+                self.tree.selection_set(first)
+                self.tree.focus(first)
+            self.tree.bind("<ButtonRelease-1>", self._on_click)
+            self.tree.bind("<Double-1>", self._on_activate)
+            self.tree.bind("<Return>", self._on_activate)
+            self.tree.bind("<Escape>", lambda _e: self.close())
+        except Exception as e:
+            # fallback на Listbox если Treeview не доступен (fake_tk)
+            try:
+                self.box = tk.Listbox(
+                    self.win,
+                    activestyle="none",
+                    borderwidth=0,
+                    relief="flat",
+                    highlightthickness=0,
+                    exportselection=False,
+                    font=("Segoe UI", 10),
+                    selectbackground="#EFF6FF",
+                    selectforeground=NAVY,
+                    background=CARD,
+                    foreground=TEXT,
+                )
+                for label, _value in self.items:
+                    self.box.insert("end", label)
+                self.box.pack(fill="both", expand=True, padx=8, pady=(2, 4))
+                if self.items:
+                    self.box.selection_set(0)
+                self._is_tree = False
+            except Exception:
+                self.box = None  # type: ignore
+                self._is_tree = False
+
         hint = "  \u25BC  «не выбирать» → товар будет «Новинка»   ·   Esc — закрыть   ·   начните печатать для поиска"
         try:
             ttk.Label(self.win, text=hint, style="Chooser.TLabel").pack(fill="x", padx=8, pady=(4, 8))
-        except Exception:  # noqa: BLE001 - подсказка не критична
+        except Exception:
             pass
 
         self._all_items = list(self.items)
-        self.box.bind("<ButtonRelease-1>", self._on_click)
-        self.box.bind("<Return>", self._on_activate)
-        self.box.bind("<Double-1>", self._on_activate)
-        self.box.bind("<Escape>", lambda _e: self.close())
+        if not self._is_tree:
+            try:
+                self.box.bind("<ButtonRelease-1>", self._on_click)
+                self.box.bind("<Return>", self._on_activate)
+                self.box.bind("<Double-1>", self._on_activate)
+                self.box.bind("<Escape>", lambda _e: self.close())
+            except Exception:
+                pass
         try:
             self.win.bind("<FocusOut>", lambda _e: self.close())
             self.win.bind("<Escape>", lambda _e: self.close())
-            self.box.focus_set()
-        except Exception:  # noqa: BLE001 - не критично
+            if self._is_tree:
+                self.tree.focus_set()
+            else:
+                self.box.focus_set()
+        except Exception:
             pass
 
     def _on_click(self, _event=None):
@@ -513,14 +663,49 @@ class _VedChooser:
         if not hasattr(self, "search_var") or self.search_var is None:
             return
         q = self.search_var.get().strip().lower()
-        self.box.delete(0, "end")
-        self.items = []
-        for label, val in self._all_items:
-            if not q or q == "поиск…" or q in label.lower():
-                self.box.insert("end", label)
-                self.items.append((label, val))
-        if self.items:
-            self.box.selection_set(0)
+        if self._is_tree:
+            # фильтр Treeview
+            try:
+                for iid in self.tree.get_children():
+                    self.tree.delete(iid)
+                self._tree_to_index.clear()
+            except Exception:
+                pass
+            self.items = []
+            for label, val in self._all_items:
+                if not q or q == "поиск…" or q in label.lower():
+                    # вставить с теми же 4 колонками
+                    if val is None:
+                        vals = ("", "", "—", label)
+                    elif val is CHOICE_CUSTOM:
+                        vals = ("", "", "", label)
+                    else:
+                        # извлечь percent из label
+                        pct = ""
+                        for part in label.split(" · "):
+                            if "%" in part or part.strip() == "—":
+                                pct = part
+                                break
+                        if not pct:
+                            pct = label.split(" · ")[0] if " · " in label else ""
+                        name = getattr(val, "nomenclature", label.split(" · ")[-1] if " · " in label else label)
+                        vals = (getattr(val, "barcode", "") or "", getattr(val, "article", "") or "", pct, name)
+                    iid = self.tree.insert("", "end", values=vals)
+                    self._tree_to_index[iid] = len(self.items)
+                    self.items.append((label, val))
+            if self.tree.get_children():
+                first = self.tree.get_children()[0]
+                self.tree.selection_set(first)
+                self.tree.focus(first)
+        else:
+            self.box.delete(0, "end")
+            self.items = []
+            for label, val in self._all_items:
+                if not q or q == "поиск…" or q in label.lower():
+                    self.box.insert("end", label)
+                    self.items.append((label, val))
+            if self.items:
+                self.box.selection_set(0)
 
     def _on_activate(self, _event=None):
         self._pick_current()
@@ -529,10 +714,24 @@ class _VedChooser:
     def _pick_current(self) -> None:
         index = 0
         try:
-            selected = self.box.curselection()
-            if selected:
-                index = int(selected[0])
-        except Exception:  # noqa: BLE001 - не критично
+            if self._is_tree:
+                sel = self.tree.selection()
+                if sel:
+                    iid = sel[0]
+                    # найти индекс в текущем отфильтрованном списке
+                    children = list(self.tree.get_children())
+                    try:
+                        index = children.index(iid)
+                    except ValueError:
+                        index = 0
+                else:
+                    # fallback на первую строку
+                    index = 0
+            else:
+                selected = self.box.curselection()
+                if selected:
+                    index = int(selected[0])
+        except Exception:
             index = 0
         if index < 0 or index >= len(self.items):
             self.close()
@@ -552,5 +751,5 @@ class _VedChooser:
         for widget in (self.win,):
             try:
                 widget.destroy()
-            except Exception:  # noqa: BLE001 - уже уничтожен
+            except Exception:
                 pass

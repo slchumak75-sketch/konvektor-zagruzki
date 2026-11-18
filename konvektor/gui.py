@@ -1749,7 +1749,7 @@ class KonvektorApp(_Base):
         self._update_status()
 
     def on_clear_table(self) -> None:
-        """Очистить таблицу и сбросить загруженный файл из буфера."""
+        """Очистить таблицу — только загруженный файл, ведомость остаётся."""
         if self._running:
             return
         self._clear_preview()
