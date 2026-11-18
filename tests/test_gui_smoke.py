@@ -636,11 +636,11 @@ def test_arrow_opens_list_only_in_vedomost_columns(gui, tmp_path):
     _click_cell(app, row_id, "▼")
     assert app._chooser is not None
     labels = app._chooser.labels()
-    # первый пункт — «не выбирать» (товар новый), последний — своё название
+    # первый пункт — «не выбирать», пункта «Своё название» нет
     assert labels[0].startswith("— не выбирать")
-    assert labels[-1] == "Своё название…"
+    assert "Своё название…" not in labels
     # похожие позиции идут с процентом совпадения
-    assert any("%" in label for label in labels[1:-1])
+    assert any("%" in label for label in labels[1:])
 
 
 def test_choosing_row_from_vedomost_renames_item(gui, tmp_path):
@@ -685,13 +685,12 @@ def test_do_not_choose_keeps_doc_name_and_marks_novinka(gui, tmp_path):
 
 
 def test_custom_item_opens_editor(gui, tmp_path):
-    """Пункт «Своё название…» открывает поле ввода поверх ячейки."""
+    """Редактирование ячейки остаётся доступным отдельно от списка."""
     app, _, _ = gui
     _open_vedomost_and_convert(app, tmp_path)
     row_id, _stored = _row_with_doc(app, "Гидроизол")
 
-    _click_cell(app, row_id, "▼")
-    _choose(app, len(app._chooser.items) - 1 if app._chooser else 0)
+    app.edit_cell(row_id)
 
     assert app._editing == row_id
     assert app._editor is not None
@@ -703,8 +702,7 @@ def test_own_text_is_kept_as_is(gui, tmp_path):
     _open_vedomost_and_convert(app, tmp_path)
     row_id, stored = _row_with_doc(app, "Гидроизол")
 
-    _click_cell(app, row_id, "▼", handler=app._on_preview_double_click)
-    _choose(app, len(app._chooser.items) - 1)
+    app.edit_cell(row_id)
     assert app._editing == row_id
     app._edit_var.set("Гидроизол ХКП S10м2 серый 3,5 мм (своё)")
     app.commit_edit()
@@ -718,8 +716,7 @@ def test_empty_typed_text_means_do_not_choose(gui, tmp_path):
     _open_vedomost_and_convert(app, tmp_path)
     row_id, stored = _row_with_doc(app, "Газ")
 
-    _click_cell(app, row_id, "▼")
-    _choose(app, len(app._chooser.items) - 1)
+    app.edit_cell(row_id)
     app._edit_var.set("")
     app.commit_edit()
 
@@ -737,8 +734,7 @@ def test_edited_name_goes_to_the_saved_file(gui, tmp_path):
     _open_vedomost_and_convert(app, tmp_path)
     row_id, _stored = _row_with_doc(app, "Гидроизол")
 
-    _click_cell(app, row_id, "▼")
-    _choose(app, len(app._chooser.items) - 1)
+    app.edit_cell(row_id)
     app._edit_var.set("Гидроизол ХКП 3,5 мм (проверено)")
     app.commit_edit()
 
@@ -764,8 +760,7 @@ def test_scroll_closes_list_and_editor(gui, tmp_path):
     app._on_preview_wheel(_Event(10, 10))
     assert app._chooser is None
 
-    _click_cell(app, row_id, "▼")
-    _choose(app, len(app._chooser.items) - 1)
+    app.edit_cell(row_id)
     assert app._editor is not None
     app._preview_yview("moveto", 0.5)  # прокрутка полосой прокрутки
     assert app._editor is None and app._editing is None

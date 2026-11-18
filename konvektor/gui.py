@@ -560,13 +560,13 @@ class KonvertorApp(_Base):
                 background=CARD,
                 fieldbackground=CARD,
                 foreground=TEXT,
-                rowheight=24,
+                rowheight=29,
                 borderwidth=1,
                 bordercolor=BORDER,
                 lightcolor=BORDER,
                 darkcolor=BORDER,
                 relief="solid",
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 11),
             )
             style.configure(
                 "Grid.Treeview.Cell",
@@ -583,7 +583,6 @@ class KonvertorApp(_Base):
                 font=("Segoe UI", 8, "bold"),
             )
             style.map("Grid.Treeview.Heading", background=[("active", BORDER_LIGHT)])
-            # Цвет тега должен оставаться видимым и у выбранной строки.
             style.map("Grid.Treeview", background=[], foreground=[("selected", NAVY)])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
             pass
@@ -1448,7 +1447,6 @@ class KonvertorApp(_Base):
             parts.append(row.nomenclature)
             label = " · ".join(parts)
             items.append((label, row))
-        items.append(("Своё название…", CHOICE_CUSTOM))
 
         bbox = None
         try:

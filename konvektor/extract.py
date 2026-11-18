@@ -128,6 +128,14 @@ def _build_item(
     barcode = parse_barcode(_col_value(values, h.col(detect.BARCODE)))
     if not barcode:
         barcode = find_barcode_in_text(name)
+    if not barcode:
+        # Примечание и другие колонки могут содержать штрихкод (цветогамма)
+        for v in values:
+            if isinstance(v, str) and v != name:
+                b = find_barcode_in_text(v)
+                if b:
+                    barcode = b
+                    break
 
     article = _cell_text(values, h.col(detect.ARTICLE))
     if len(article) > 64:
