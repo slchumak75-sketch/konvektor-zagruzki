@@ -1354,11 +1354,15 @@ class KonvektorApp(_Base):
 
         items = [("— не выбирать (новый товар) —", None)]
         for score, row in self._suggestions(entry):
-            label = f"{score:.0%} · {row.nomenclature}"
-            if row.article:
-                label += f" · арт. {row.article}"
+            # только штрихкод/артикул/процент/наименование — как просил заказчик
+            parts: list[str] = []
             if row.barcode:
-                label += f" · штрихкод {row.barcode}"
+                parts.append(f"штрихкод {row.barcode}")
+            if row.article:
+                parts.append(f"арт. {row.article}")
+            parts.append(f"{score:.0%}")
+            parts.append(row.nomenclature)
+            label = " · ".join(parts)
             items.append((label, row))
         items.append(("Своё название…", CHOICE_CUSTOM))
 
