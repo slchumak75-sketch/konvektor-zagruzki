@@ -1,4 +1,4 @@
-"""Консольный интерфейс (Konvektor-cli.exe / python -m konvektor.cli)."""
+"""Консольный интерфейс (Konvertor-cli.exe / python -m konvektor.cli)."""
 
 from __future__ import annotations
 
@@ -34,10 +34,10 @@ def _safe_streams() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="Konvektor-cli",
+        prog="Konvertor-cli",
         description=f"{APP_NAME} {__version__} — конвертер счетов/накладных/прайсов "
         "в единую Excel-таблицу по образцу.",
-        epilog="Пример: Konvektor-cli.exe счет.xls ТТН.xlsx -o Загрузка.xlsx",
+        epilog="Пример: Konvertor-cli.exe счет.xls ТТН.xlsx -o Загрузка.xlsx",
     )
     p.add_argument("files", nargs="*", help="файлы и/или папки для конвертации")
     p.add_argument(

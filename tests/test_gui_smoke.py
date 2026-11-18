@@ -36,7 +36,7 @@ def gui(monkeypatch, known_paths, tmp_path):
     sample = next(
         (p for p in known_paths if p.name.startswith("Кореличи")), known_paths[0]
     )
-    app = module.KonvektorApp(initial_files=[str(sample)])
+    app = module.KonvertorApp(initial_files=[str(sample)])
     app.fake_dialogs = dialogs
     app.test_documents = str(documents)
     yield app, module, dialogs
@@ -64,7 +64,7 @@ def test_window_builds_with_single_file(gui, known_paths):
     app, module, _ = gui
     assert len(app.files) == 1
     assert app.file_var.get().startswith("Кореличи")
-    assert "Конвектор" in app.title()
+    assert "Конвертор" in app.title()
     # в окне две колонки наименования, «▼» для выбора и процент совпадения
     assert list(app.preview.columns_list) == [
         "Штрихкод", "Артикул", "Из документа", "Из ведомости", "▼", "% совпадения",
@@ -225,8 +225,8 @@ def test_path_field_with_browse_button(gui, tmp_path):
     app.out_var.set("   ")
     assert app.output_dir() == ""
     # и вписать любой другой
-    app.out_var.set("D:\\Мои документы\\Конвектор")
-    assert app.output_dir() == "D:\\Мои документы\\Конвектор"
+    app.out_var.set("D:\\Мои документы\\Конвертор")
+    assert app.output_dir() == "D:\\Мои документы\\Конвертор"
 
 
 def test_second_save_does_not_overwrite(gui):
@@ -333,7 +333,7 @@ def test_open_buttons_follow_save(gui, monkeypatch):
     assert app.open_folder_btn.cget("state") == "disabled"
 
     opened = []
-    monkeypatch.setattr(module.KonvektorApp, "_open_path", staticmethod(opened.append))
+    monkeypatch.setattr(module.KonvertorApp, "_open_path", staticmethod(opened.append))
 
     app.on_open_result()          # файла ещё нет — только сообщение
     assert opened == []

@@ -4,7 +4,9 @@
   * .xlsx / .xlsm  — openpyxl;
   * .xls / .et      — xlrd (в т.ч. «кривые» выгрузки 1С: ignore_workbook_corruption);
   * .html / .htm / .mht — таблицы из HTML (часто так отдают прайсы);
-  * .csv / .txt / .tsv — CSV с автоопределением кодировки и разделителя.
+  * .csv / .txt / .tsv — CSV с автоопределением кодировки и разделителя;
+  * .rtf            — RTF с таблицами (МАВ: через striprtf);
+  * .pdf            — PDF с таблицами (Элсви: через pdfplumber).
 
 Формат определяется по содержимому файла (магические байты), а не по
 расширению, потому что поставщики регулярно присылают .xls, внутри которого
@@ -68,6 +70,10 @@ MAGIC_ZIP = b"PK\x03\x04"
 # --------------------------------------------------------------------------- #
 #  Определение формата
 # --------------------------------------------------------------------------- #
+MAGIC_RTF = b"{\\rtf"
+MAGIC_PDF = b"%PDF"
+
+
 def sniff_kind(data: bytes, filename: str = "") -> str:
     head = data[:4096]
     if head.startswith(MAGIC_ZIP):
@@ -78,6 +84,10 @@ def sniff_kind(data: bytes, filename: str = "") -> str:
         return "xlsx"
     stripped = head.lstrip(b"\xef\xbb\xbf \t\r\n")
     low = stripped[:512].lower()
+    if stripped.startswith(b"{\\rtf") or head.strip().startswith(MAGIC_RTF):
+        return "rtf"
+    if stripped.startswith(b"%PDF") or head.strip().startswith(MAGIC_PDF):
+        return "pdf"
     if stripped[:1] == b"<" or b"<html" in low or b"<?xml" in low or b"<table" in low:
         if b"<table" in low or b"<html" in low or b"urn:schemas-microsoft-com:office:spreadsheet" in low:
             return "html"
@@ -85,6 +95,10 @@ def sniff_kind(data: bytes, filename: str = "") -> str:
     name = filename.lower()
     if name.endswith((".html", ".htm", ".mht", ".mhtml")):
         return "html"
+    if name.endswith(".rtf"):
+        return "rtf"
+    if name.endswith(".pdf"):
+        return "pdf"
     if name.endswith((".csv", ".txt", ".tsv")):
         return "csv"
     return "csv"
@@ -367,6 +381,149 @@ def _read_spreadsheetml(text: str) -> List[Sheet]:
 
 
 # --------------------------------------------------------------------------- #
+#  RTF (МАВ)
+# --------------------------------------------------------------------------- #
+def _read_rtf(data: bytes) -> List[Sheet]:
+    """Прочитать RTF с таблицами (МАВ). Использует striprtf для извлечения текста."""
+
+    # Декодируем как надо — RTF от МАВ в cp1251
+    for enc in ("utf-8", "cp1251", "windows-1251", "utf-16"):
+        try:
+            rtf_text = data.decode(enc)
+            if "{\\rtf" in rtf_text:
+                break
+        except UnicodeDecodeError:
+            continue
+    else:
+        rtf_text = data.decode("utf-8", "replace")
+
+    try:
+        from striprtf.striprtf import rtf_to_text
+
+        plain = rtf_to_text(rtf_text)
+    except Exception as exc:  # noqa: BLE001 - striprtf не установлен или битый RTF
+        raise ValueError(f"rtf: {exc}") from exc
+
+    # plain — строки с '|' как разделителями ячеек (как в Word-экспорте)
+    raw_lines = [ln for ln in plain.splitlines() if ln.strip()]
+
+    rows: List[List[Any]] = []
+    for line in raw_lines:
+        if "|" in line:
+            # разделить по '|' — это колонки таблицы
+            cells = [c.strip() or None for c in line.split("|")]
+            # убрать крайние пустые (строка начинается и кончается с |)
+            while cells and cells[0] is None:
+                cells.pop(0)
+            while cells and cells[-1] is None:
+                cells.pop()
+            # пустые итоговые строки пропускаем? Нет, «ИТОГО» нужен
+            if any(v is not None and str(v).strip() for v in cells):
+                rows.append(cells)
+        else:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # служебные строки (заголовки счёта) — кладём как одну ячейку, чтобы layout их пропустил,
+            # но meta нашла поставщика
+            # Если это похоже на заголовок документа (СЧЕТ-ФАКТУРА, Поставщик, Покупатель) — оставляем
+            if any(kw in stripped for kw in ("СЧЕТ-ФАКТУРА", "Поставщик:", "Покупатель:", "УНП", "IBAN", "Всего к оплате", "ИТОГО")):
+                rows.append([stripped])
+
+    if not rows:
+        raise ValueError("в RTF не найдено таблиц")
+
+    # --- Склейка раздробленного заголовка МАВ ---
+    # В RTF от МАВ заголовок таблицы разбит на 5 физических строк из-за переносов внутри ячеек:
+    #   ['№','Наименование товара','Инвент.'] + ['Номер','Един.'] + ['Изм.','Количество','Цена без НДС,'] + ...
+    # Детектим этот паттерн и заменяем на одну каноническую строку из 9 колонок.
+    # Признак: подряд идут строки где есть 'Инвент.'/'Номер'/'Изм.'/'бел. руб' и следующая строка начинается с '1' (данные)
+    canonical_header = [
+        "№",
+        "Наименование товара",
+        "Инвент. Номер",
+        "Един. Изм.",
+        "Количество",
+        "Цена без НДС, бел. руб",
+        "Стоимость без НДС, бел. руб",
+        "Сумма НДС по ставке 20%, бел. руб",
+        "Стоимость с НДС, бел. руб",
+    ]
+    # ищем фрагмент заголовка
+    frag_start = None
+    frag_end = None
+    for idx, row in enumerate(rows):
+        first = str(row[0] or "").strip() if row else ""
+        # начало фрагмента — строка с '№' и 'Наименование'
+        if first == "№" and any("Наименование" in str(c or "") for c in row):
+            frag_start = idx
+        # конец фрагмента — строки с 'бел. руб' перед данными
+        if frag_start is not None and first == "1" and len(row) == 9:
+            # нашли первую строку данных — фрагмент заканчивается перед ней
+            frag_end = idx
+            break
+    if frag_start is not None and frag_end is not None and frag_end - frag_start >= 3:
+        # проверяем что между ними были фрагменты с 'Инвент.'/'Номер'/'Изм.'
+        middle_text = " ".join(" ".join(str(c or "") for c in rows[i]) for i in range(frag_start, frag_end))
+        if "Инвент." in middle_text and "Един." in middle_text:
+            # заменяем фрагмент на одну строку
+            rows = rows[:frag_start] + [canonical_header] + rows[frag_end:]
+
+    return [Sheet(name="RTF", rows=rows)]
+
+
+# --------------------------------------------------------------------------- #
+#  PDF (Элсви)
+# --------------------------------------------------------------------------- #
+def _read_pdf(data: bytes) -> List[Sheet]:
+    """Прочитать PDF с таблицами (Элсви). Использует pdfplumber."""
+
+    try:
+        import pdfplumber
+    except ImportError as exc:
+        raise ValueError("pdf: нужен pdfplumber (pip install pdfplumber)") from exc
+
+    rows: List[List[Any]] = []
+    texts: List[str] = []
+
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                # сначала пробуем таблицы
+                tables = page.extract_tables() or []
+                for tbl in tables:
+                    for raw_row in tbl:
+                        if not raw_row:
+                            continue
+                        cells = [str(c).strip().replace("\n", " ") if c is not None else None for c in raw_row]
+                        # очистить «2 160,00» -> оставить как есть, парсинг чисел делает extract позже
+                        while cells and cells[-1] is None:
+                            cells.pop()
+                        if any(v is not None and str(v).strip() for v in cells):
+                            rows.append(cells)
+                # также текст страницы для meta (поставщик, покупатель)
+                t = page.extract_text() or ""
+                if t.strip():
+                    for ln in t.splitlines():
+                        if ln.strip():
+                            texts.append(ln.strip())
+    except Exception as exc:  # noqa: BLE001 - битый PDF
+        raise ValueError(f"pdf: {exc}") from exc
+
+    if not rows:
+        # Фолбэк: попробовать разобрать текст построчно как псевдотаблицу
+        if texts:
+            for ln in texts:
+                if any(kw in ln for kw in ("СЧЕТ", "Продавец", "Покупатель", "Итого", "Сумма НДС")):
+                    rows.append([ln])
+        if not rows:
+            raise ValueError("в PDF не найдено таблиц")
+
+    sheet = Sheet(name="PDF", rows=rows)
+    return [sheet]
+
+
+# --------------------------------------------------------------------------- #
 #  CSV / TXT
 # --------------------------------------------------------------------------- #
 def _read_csv(data: bytes) -> List[Sheet]:
@@ -416,6 +573,10 @@ def read_source(path: str) -> SourceFile:
         attempts = [("xlsx", _read_xlsx), ("xls", _read_xls), ("html", _read_html)]
     elif kind == "xls":
         attempts = [("xls", _read_xls), ("xlsx", _read_xlsx), ("html", _read_html)]
+    elif kind == "rtf":
+        attempts = [("rtf", _read_rtf), ("html", _read_html), ("xlsx", _read_xlsx), ("xls", _read_xls), ("csv", _read_csv)]
+    elif kind == "pdf":
+        attempts = [("pdf", _read_pdf), ("html", _read_html), ("csv", _read_csv)]
     else:
         attempts = [("html", _read_html), ("xlsx", _read_xlsx), ("xls", _read_xls), ("csv", _read_csv)]
 

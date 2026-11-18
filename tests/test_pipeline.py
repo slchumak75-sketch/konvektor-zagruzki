@@ -155,7 +155,8 @@ def test_source_columns(known_paths, tmp_path):
 def test_selftest(known_paths, sample_dir):
     ok, message = selftest(sample_dir)
     assert ok, message
-    assert "позиций 301" in message
+    # 301 позиций на старых образцах + 64 из МАВ/Элсви (23+23+13+5)
+    assert "позиций 365" in message
 
 
 def test_empty_input(tmp_path):
