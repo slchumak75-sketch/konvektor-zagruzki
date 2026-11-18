@@ -280,7 +280,7 @@ class KonvertorApp(_Base):
         file_mb.pack(side="left", padx=(0, 6))
 
         # 2. Меню «Конвертировать ▾»
-        self.convert_mb = ttk.Menubutton(nav, text="Конвертировать ▾", style="HeaderPrimary.TMenubutton")
+        self.convert_mb = ttk.Menubutton(nav, text="Конвертировать ▾", style="Header.TMenubutton")
         convert_menu = tk.Menu(self.convert_mb, tearoff=0)
         self.convert_buttons = {}
         for strategy in (MATCH_BARCODE, MATCH_ARTICLE, MATCH_NAME):
@@ -295,14 +295,14 @@ class KonvertorApp(_Base):
 
         # 3. Кнопка «Сохранить»
         self.save_btn = ttk.Button(
-            nav, text="Сохранить", style="Secondary.TButton",
+            nav, text="Сохранить", style="Header.TButton",
             command=self.on_save, state="disabled",
         )
         self.save_btn.pack(side="left", padx=(0, 6))
 
         # 4. Кнопка «Очистить таблицу» — очищает только загруженный файл, ведомость остаётся
         self.clear_btn = ttk.Button(
-            nav, text="Очистить таблицу", style="Secondary.TButton",
+            nav, text="Очистить таблицу", style="Header.TButton",
             command=self.on_clear_table,
         )
         self.clear_btn.pack(side="left", padx=(0, 6))
@@ -540,12 +540,13 @@ class KonvertorApp(_Base):
             )
             style.configure("Path.TEntry", padding=(6, 5), fieldbackground=CARD)
             style.configure("TSeparator", background=BORDER)
-            style.configure("Header.TMenubutton", background=NAVY, foreground="#FFFFFF", font=("Segoe UI", 9, "bold"), padding=(12, 6))
-            style.map("Header.TMenubutton", background=[("active", NAVY_HOVER), ("pressed", NAVY_LIGHT)])
-            style.configure("HeaderPrimary.TMenubutton", background=ACCENT, foreground="#FFFFFF", font=("Segoe UI", 9, "bold"), padding=(14, 7))
-            style.map("HeaderPrimary.TMenubutton", background=[("active", ACCENT_HOVER), ("pressed", ACCENT_DARK)])
-            style.configure("Secondary.TButton", background=CARD, foreground=NAVY, font=("Segoe UI", 9), padding=(12, 5), bordercolor=BORDER)
-            style.map("Secondary.TButton", background=[("active", BG_SOFT), ("pressed", BORDER_LIGHT)], foreground=[("disabled", MUTED)])
+            # Все элементы верхней панели в одном цветовом формате.
+            for name in ("Header.TMenubutton", "Header.TButton"):
+                style.configure(name, background=ACCENT, foreground="#FFFFFF",
+                                font=("Segoe UI", 9, "bold"), padding=(12, 6),
+                                bordercolor=ACCENT)
+                style.map(name, background=[("pressed", ACCENT_DARK), ("active", ACCENT_HOVER)],
+                          foreground=[("disabled", "#BFD0E6")])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
             pass
 

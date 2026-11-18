@@ -804,9 +804,14 @@ def test_step_cards_use_compact_buttons(gui):
     assert "Папка сохранения…" in texts
     # кнопки сгруппированы в выпадающие меню на синем заголовке
     header_menus = [
-        record for record in fake_tk.RECORDS if record.get("style") in ("Header.TMenubutton", "HeaderPrimary.TMenubutton")
+        record for record in fake_tk.RECORDS if record.get("style") == "Header.TMenubutton"
     ]
     assert len(header_menus) >= 3
+    assert {record.get("text") for record in header_menus} >= {
+        "Файл и ведомость ▾", "Конвертировать ▾", "Настройки ▾"
+    }
+    header_buttons = [r for r in fake_tk.RECORDS if r.get("style") == "Header.TButton"]
+    assert {r.get("text") for r in header_buttons} >= {"Сохранить", "Очистить таблицу"}
 
 
 # -------------------------------------------- склад и поставщик (диалог 1.7.0)
