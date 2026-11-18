@@ -996,3 +996,20 @@ def test_conversion_completes_without_info_popup(gui):
     assert app._pending_result.items_count > 0
     assert app.save_btn.cget("state") == "normal"
     assert not any(call[0] == "showinfo" for call in dialogs.calls)
+
+
+def test_header_displays_selected_sklad_and_suppliers(gui):
+    app, _, _ = gui
+    assert app.source_header.cget("textvariable") is app.source_var
+    assert app.source_header.cget("style") == "HeaderSource.TLabel"
+    app._source_chosen("Мир", 'ООО "ОМА", ООО Альфа')
+    assert app.source_var.get() == 'Мир / ООО "ОМА", ООО Альфа'
+    app._source_chosen("Кореличи", "")
+    assert app.source_var.get() == "Кореличи / как в документе"
+
+
+def test_settings_menu_does_not_offer_save_settings(gui):
+    app, _, _ = gui
+    menu = app.table_mb.options["menu"]
+    assert not any(item.get("label") == "Сохранить настройки" for item in menu.items)
+    assert any(item.get("label") == "Сохранить поля таблицы" for item in menu.items)

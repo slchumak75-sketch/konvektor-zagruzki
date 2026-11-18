@@ -316,10 +316,15 @@ class KonvertorApp(_Base):
         table_menu.add_command(label="Порог совпадения…", command=self.on_edit_threshold)
         table_menu.add_separator()
         table_menu.add_command(label="Сбросить ширину колонок", command=self.on_reset_column_widths)
-        table_menu.add_command(label="Сохранить настройки", command=self.on_save_settings)
         table_mb["menu"] = table_menu
         table_mb.pack(side="left")
         self.table_mb = table_mb
+
+        # Текущий склад и поставщики видны в синей шапке после выбора.
+        self.source_header = ttk.Label(
+            header, textvariable=self.source_var, style="HeaderSource.TLabel", anchor="center"
+        )
+        self.source_header.pack(side="left", fill="x", expand=True, padx=(16, 8))
 
         # кнопка «Открыть» убрана по ТЗ, но для тестов/совместимости храним состояние
         class _DummyProxy:
@@ -497,6 +502,8 @@ class KonvertorApp(_Base):
                 foreground="#FFFFFF",
                 font=("Segoe UI", 16, "bold"),
             )
+            style.configure("HeaderSource.TLabel", background=NAVY, foreground="#FFFFFF",
+                            font=("Segoe UI", 16, "bold"))
             style.configure(
                 "HeaderSub.TLabel",
                 background=NAVY,
@@ -834,7 +841,7 @@ class KonvertorApp(_Base):
             self.hint_var.set("Склад не выбран — файл сохранится сразу в папку «Путь».")
 
     def source_text(self) -> str:
-        """Строка «склад / поставщик» под полем пути."""
+        """Строка «склад / поставщик» для синей панели."""
         if not self._sklad:
             return "не выбран (как в документе)"
         supplier = self._supplier_choice or "как в документе"
