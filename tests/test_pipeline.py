@@ -39,14 +39,14 @@ def test_combined_result(combined):
 def test_workbook_structure(combined):
     _, path = combined
     wb = load_workbook(path)
-    assert wb.sheetnames == ["Данные", "Проверки", "Сводка"]
+    assert wb.sheetnames == ["Данные"]
 
     ws = wb["Данные"]
     header = [c.value for c in ws[1]]
     assert header == TEMPLATE_COLUMNS
     assert ws.max_row == 2 + 301  # шапка + позиции + итог
     assert ws.freeze_panes == "A2"
-    assert ws.auto_filter.ref == "A1:J302"
+    assert ws.auto_filter.ref is None
 
     # строка итогов — формулы
     total_row = ws.max_row
@@ -60,32 +60,15 @@ def test_workbook_structure(combined):
     assert c.number_format == "@"
 
 
-def test_summary_sheet(combined):
-    _, path = combined
-    ws = load_workbook(path)["Сводка"]
-    rows = list(ws.iter_rows(values_only=True))
-    assert rows[0][0] == "Файл"
-    # столбцы: Файл, Формат, Лист(ы), Поставщик, УНП, Документ, Дата, Позиций, …
-    assert rows[0][3] == "Поставщик"
-    assert rows[0][5] == "Документ"
-    assert rows[0][6] == "Дата документа"
-    files = [r[0] for r in rows[1:] if r[0] and r[7] is not None and r[0] != "ВСЕГО"]
-    assert len(files) == 10
-    total = next(r for r in rows if r[0] == "ВСЕГО")
-    assert total[7] == 301
-    assert round(total[10], 2) == pytest.approx(16579.02, abs=0.01)
-
-
-def test_summary_sheet_has_supplier_and_date(combined):
-    """Поставщик и дата документа выгружаются в «Сводку» по каждому файлу."""
-    _, path = combined
-    ws = load_workbook(path)["Сводка"]
-    rows = {r[0]: r for r in ws.iter_rows(min_row=2, values_only=True) if r[0]}
-    row = next(v for k, v in rows.items() if k.endswith("_№ 10802 от 12 ноября 2026 г .XLS"))
-    assert row[3] == 'ООО "Культбытхозторгплюс"'
-    assert row[4] == "192553707"
-    assert row[5] == "Счет № 3596616"
-    assert row[6] == "12.11.2026"
+def test_stats_retained_without_summary_sheet(combined):
+    result, _ = combined
+    assert len(result.stats) == 10
+    assert sum(stat.items for stat in result.stats) == 301
+    stat = next(s for s in result.stats if s.path.endswith("_№ 10802 от 12 ноября 2026 г .XLS"))
+    assert stat.supplier == 'ООО "Культбытхозторгплюс"'
+    assert stat.supplier_unp == "192553707"
+    assert stat.doc_number == "3596616"
+    assert stat.doc_date == "12.11.2026"
 
 
 def test_result_metas(combined):
@@ -100,12 +83,10 @@ def test_result_metas(combined):
     assert stat.doc_number == "11121-000020449"
 
 
-def test_issues_sheet_marks_computed(combined):
+def test_computed_values_remain_highlighted(combined):
     _, path = combined
-    ws = load_workbook(path)["Проверки"]
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    assert rows
-    assert {r[1] for r in rows} == {"РАСЧЁТ"}
+    result, _ = combined
+    assert result.report.infos
     # жёлтая заливка у рассчитанных значений в «Данных»
     ws_data = load_workbook(path)["Данные"]
     filled = [
@@ -123,8 +104,10 @@ def test_mode_sheets(known_paths, tmp_path):
     )
     assert result.error_count == 0
     wb = load_workbook(str(out))
-    assert len([n for n in wb.sheetnames if n not in ("Проверки", "Сводка")]) == len(known_paths)
+    assert len(wb.sheetnames) == len(known_paths)
+    assert "Проверки" not in wb.sheetnames and "Сводка" not in wb.sheetnames
     assert all(n[:31] for n in wb.sheetnames)
+    assert all(ws.auto_filter.ref is None for ws in wb.worksheets)
 
 
 def test_mode_files(known_paths, tmp_path):
@@ -134,8 +117,9 @@ def test_mode_files(known_paths, tmp_path):
     for path in result.outputs:
         assert os.path.exists(path)
         wb = load_workbook(path)
-        assert "Данные" in wb.sheetnames
+        assert wb.sheetnames == ["Данные"]
         assert wb["Данные"].cell(row=1, column=1).value == "Штрихкод"
+        assert wb["Данные"].auto_filter.ref is None
 
 
 def test_source_columns(known_paths, tmp_path):

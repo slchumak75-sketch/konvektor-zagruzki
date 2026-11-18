@@ -5,9 +5,7 @@
     Штрихкод | Артикул | Наименование товара | ед. изм. | количество |
     цена | сумма | ставка НДС | сумма НДС | сумма с НДС
 
-Дополнительно создаются листы «Проверки» (все расхождения и расчёты) и
-«Сводка» (что и откуда взято). Значения, которые пришлось рассчитать
-программе, залиты жёлтым — визуально видно, что это не данные поставщика.
+Значения, которые пришлось рассчитать программой, залиты жёлтым.
 """
 
 from __future__ import annotations
@@ -272,8 +270,6 @@ def _write_data_sheet(
         r += 1
 
     ws.freeze_panes = "A2"
-    if items:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{r - 2}"
     return r
 
 
@@ -447,12 +443,9 @@ def write_workbook(path: str, payload: WorkbookPayload) -> str:
             with_novinka=payload.with_novinka,
         )
 
-    issues_ws = wb.create_sheet(safe_sheet_title("Проверки", used))
-    used.append("Проверки")
-    _write_issues_sheet(issues_ws, payload.report.issues)
-
-    summary_ws = wb.create_sheet(safe_sheet_title("Сводка", used))
-    _write_summary_sheet(summary_ws, payload)
+    if not wb.sheetnames:
+        ws = wb.create_sheet("Данные")
+        _write_data_sheet(ws, [], with_source=payload.with_source, with_novinka=payload.with_novinka)
 
     wb.properties.title = "Конвертированная таблица"
     wb.properties.creator = f"{APP_NAME} {__version__}"

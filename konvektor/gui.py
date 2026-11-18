@@ -1185,7 +1185,11 @@ class KonvertorApp(_Base):
             if result.errors:
                 text += "\n\nОшибки: " + "; ".join(result.errors)
             if result.error_count:
-                messagebox.showwarning(APP_NAME, text + "\n\nПодробности — на листе «Проверки».")
+                issues = result.report.errors if result.report else []
+                details = [f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in issues[:10]]
+                if len(issues) > 10:
+                    details.append(f"И ещё ошибок: {len(issues) - 10}")
+                messagebox.showwarning(APP_NAME, text + ("\n\n" + "\n".join(details) if details else ""))
             else:
                 messagebox.showinfo(APP_NAME, text)
         else:
