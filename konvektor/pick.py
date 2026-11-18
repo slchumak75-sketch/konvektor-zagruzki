@@ -452,8 +452,8 @@ def install_styles(style) -> None:
         style.configure("Chooser.TLabel", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 8))
         style.configure("Chooser.TButton", font=("Segoe UI", 9), padding=(6, 3))
         style.configure("Chooser.Search.TEntry", fieldbackground="#FFFFFF", padding=(8, 6))
-        style.configure("Chooser.Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT, rowheight=22, font=("Segoe UI", 9))
-        style.configure("Chooser.Treeview.Heading", background=BG_SOFT, foreground=NAVY, font=("Segoe UI", 8, "bold"))
+        style.configure("Chooser.Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT, rowheight=27, font=("Segoe UI", 11))
+        style.configure("Chooser.Treeview.Heading", background=BG_SOFT, foreground=NAVY, font=("Segoe UI", 10, "bold"))
         style.map("Chooser.Treeview", background=[("selected", "#EFF6FF")], foreground=[("selected", NAVY)])
     except Exception:  # noqa: BLE001 - оформление не критично
         pass
@@ -481,29 +481,20 @@ class _VedChooser:
             screen_h = app.winfo_screenheight() if hasattr(app, "winfo_screenheight") else 800
             max_h = max(400, screen_h - y - 40) if screen_h else 600
             height = min(max_h, max(360, 28 * len(self.items) + 64))
+            # если не вмещается вниз — переворачиваем вверх
+            if screen_h and y + height > screen_h - 10:
+                y = max(10, y - height - 30)
         except Exception:
             height = min(600, 28 * len(self.items) + 64)
         try:
             popup_w = max(int(width), 640)
-            # расширили чтобы столбики читались отдельно
             popup_w = max(popup_w, 760)
             self.win.geometry(f"{popup_w}x{int(height)}+{int(x)}+{int(y)}")
         except Exception:
             pass
 
-        # поиск
-        try:
-            search_row = tk.Frame(self.win, background="#F8FAFC", highlightbackground=BORDER, highlightthickness=1)
-            search_row.pack(fill="x", padx=8, pady=(8, 6))
-            tk.Label(search_row, text="\U0001F50D", background="#F8FAFC", foreground=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(8, 4))
-            self.search_var = tk.StringVar()
-            self.search_entry = ttk.Entry(search_row, textvariable=self.search_var, style="Chooser.Search.TEntry", font=("Segoe UI", 9))
-            self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), pady=4)
-            self.search_entry.insert(0, "Поиск…")
-            self.search_entry.bind("<FocusIn>", lambda e: self.search_var.set("") if self.search_var.get()=="Поиск…" else None)
-            self.search_entry.bind("<KeyRelease>", self._on_search)
-        except Exception:
-            self.search_var = None
+        # поиск убран по ТЗ — выпадающее без окна поиска
+        self.search_var = None
 
         # Таблица в 4 столбика: штрихкод | артикул | % | наименование — без слов "штрихкод"/"арт."
         self._is_tree = False
@@ -524,13 +515,12 @@ class _VedChooser:
             self.tree.configure(yscrollcommand=vsb.set)
             self.tree.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=(2, 4))
             vsb.pack(side="right", fill="y", pady=(2, 4), padx=(0, 8))
-            # заполнение
+            # заполнение — CHOICE_CUSTOM убран по ТЗ (больше нет «Своё название»)
             for label, val in self.items:
+                if val is CHOICE_CUSTOM:
+                    continue
                 if val is None:
-                    # не выбирать
                     vals = ("", "", "—", label)
-                elif val is CHOICE_CUSTOM:
-                    vals = ("", "", "", label)
                 else:
                     # row is VedRow
                     try:
@@ -635,7 +625,7 @@ class _VedChooser:
                 self.box = None  # type: ignore
                 self._is_tree = False
 
-        hint = "  \u25BC  «не выбирать» → товар будет «Новинка»   ·   Esc — закрыть   ·   начните печатать для поиска"
+        hint = "  \u25BC  «не выбирать» → товар будет «Новинка»   ·   Esc — закрыть"
         try:
             ttk.Label(self.win, text=hint, style="Chooser.TLabel").pack(fill="x", padx=8, pady=(4, 8))
         except Exception:
@@ -665,8 +655,8 @@ class _VedChooser:
         return "break"
 
     def _on_search(self, _event=None):
-        if not hasattr(self, "search_var") or self.search_var is None:
-            return
+        # поиск убран — заглушка для совместимости
+        return
         q = self.search_var.get().strip().lower()
         if self._is_tree:
             # фильтр Treeview
