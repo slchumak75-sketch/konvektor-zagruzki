@@ -86,15 +86,6 @@ jobs:
           if (-not (Test-Path .\dist\Konvertor.exe)) { throw "Konvertor.exe не собран" }
           Get-Item .\dist\Konvertor.exe, .\dist\Konvertor-cli.exe | Format-Table Name, Length
 
-      - name: Упаковать в ZIP
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item -Force dist\Konvertor.exe package\
-          Copy-Item -Force dist\Konvertor-cli.exe package\
-          if (Test-Path README.md) { Copy-Item -Force README.md package\README.md }
-          Compress-Archive -Path package\* -DestinationPath Konvertor-windows.zip -Force
-
       - name: Сохранить готовые файлы
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +93,6 @@ jobs:
           path: |
             dist/Konvertor.exe
             dist/Konvertor-cli.exe
-            Konvertor-windows.zip
           retention-days: 90
 
       - name: Опубликовать релиз (только для тегов v*)
@@ -112,16 +102,7 @@ jobs:
           # Пробные сборки не заменяют последний стабильный релиз.
           prerelease: ${{ contains(github.ref_name, 'rc') }}
           make_latest: ${{ contains(github.ref_name, 'rc') && 'false' || 'legacy' }}
-          files: |
-            dist/Konvertor.exe
-            dist/Konvertor-cli.exe
-            Konvertor-windows.zip
+          files: dist/Konvertor.exe
           generate_release_notes: true
           body: |
-            Готовые файлы для Windows:
-
-            * `Konvertor.exe` — оконная программа (просто запустить).
-            * `Konvertor-cli.exe` — консольная версия для пакетной обработки.
-            * `Konvertor-windows.zip` — оба файла + инструкция.
-
-            Скачайте ZIP, распакуйте в любую папку и запустите `Konvertor.exe`.
+            Скачайте и запустите `Konvertor.exe` — архив не требуется.

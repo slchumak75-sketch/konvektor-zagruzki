@@ -202,18 +202,17 @@ def output_path_for(
     sklad: str = "",
     supplier: str = "",
 ) -> str:
-    """Куда сложить результат.
-
-    Без склада — <папка>/<поставщик дата>.xlsx (как раньше).
-    Со складом — <папка>/<склад>/<поставщик>/<дата>.xlsx: склад выбирает
-    пользователь в окне, поставщик — выбранный им или найденный в документе.
-    """
+    """Результат в папке склада; склад, поставщики и дата — в имени файла."""
     base = base_dir or documents_dir()
     if sklad:
-        name = safe_path_part(supplier or (meta.supplier if meta else "")) or "Поставщик не определён"
-        folder = os.path.join(base, safe_path_part(sklad), safe_path_part(name))
+        name = supplier or (meta.supplier if meta else "") or "Поставщик не определён"
         day = date or _dt.date.today()
-        return os.path.join(folder, safe_path_part(fmt_date(day), limit=40) + ".xlsx")
+        prefix = safe_path_part(f"{sklad} {name}", limit=135)
+        filename = f"{prefix} {fmt_date(day)}.xlsx"
+        return os.path.join(base, safe_path_part(sklad), filename)
+    if supplier:
+        day = date or _dt.date.today()
+        return os.path.join(base, safe_path_part(f"{supplier} {fmt_date(day)}", limit=150) + ".xlsx")
     return os.path.join(base, output_filename(meta, date=date))
 
 
@@ -434,7 +433,7 @@ def convert(
                     key=str.casefold,
                 )
                 combined_supplier = ", ".join(unique_suppliers)
-            if combined_supplier:
+            if combined_supplier or options.sklad:
                 first_meta = metas.get(per_file_items[0][0])
                 out_path = unique_output_path(
                     output_path_for(

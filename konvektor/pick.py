@@ -3,7 +3,7 @@
 Заказчик просил: при загрузке файла программа спрашивает **склад**
 («Мир» или «Кореличи») и даёт выбрать **поставщика** из тех, что есть в
 загруженной ведомости. Склад и поставщик задают папку результата
-(``<папка>/<склад>/<поставщик>/<дата>.xlsx``) и то, среди чьих позиций искать
+(``<папка>/<склад>/<склад поставщик дата>.xlsx``) и то, среди чьих позиций искать
 номенклатуру в ведомости.
 """
 
@@ -174,7 +174,7 @@ class SourceDialog:
             except Exception:
                 pass
             self.sklad_buttons[name] = btn
-        tk.Label(card, text="Файл попадёт в папку «склад / поставщик / дата.xlsx»", background=CARD, foreground=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 6))
+        tk.Label(card, text="Файл попадёт в папку склада: «склад поставщик дата.xlsx»", background=CARD, foreground=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=14, pady=(0, 6))
 
         # 2: заголовок поставщиков
         ttk.Label(self.win, text="  Поставщик (по алфавиту):", background=BG, foreground=TEXT, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", **pad)
@@ -190,13 +190,6 @@ class SourceDialog:
             self.supplier_search_entry.grid(row=0, column=1, sticky="ew")
             self.search_count_label = tk.Label(search_frame, text="", background=BG, foreground=MUTED, font=("Segoe UI", 8))
             self.search_count_label.grid(row=0, column=2, padx=(8, 0))
-            # крестик для очистки выбранных поставщиков (для следующей загрузки)
-            self.clear_supplier_btn = ttk.Button(search_frame, text="✕", width=3, style="Pick.Tool.TButton", command=self._clear_supplier_selection)
-            self.clear_supplier_btn.grid(row=0, column=3, padx=(6, 0))
-            try:
-                self.clear_supplier_btn.configure(cursor="hand2")
-            except Exception:
-                pass
             self._search_placeholder = "Поиск поставщика…"
             self._search_has_placeholder = True
             self.supplier_search_entry.insert(0, self._search_placeholder)
@@ -390,7 +383,7 @@ class SourceDialog:
         return (
             f"В ведомости {len(self.suppliers)} поставщик(ов) по алфавиту. "
             "Отметьте своего — номенклатура подберётся только среди его позиций, "
-            "а файл попадёт в папку «склад / поставщик»."
+            "а файл попадёт в папку склада."
         )
 
     # ------------------------------------------------------------------ данные
@@ -416,6 +409,9 @@ class SourceDialog:
     # ---------------------------------------------------------------- события
     def on_ok(self) -> None:
         sklad, supplier = self.sklad_value, self.supplier_value
+        for var in self.supplier_vars.values():
+            var.set(False)
+        self.supplier_var.set("")
         self.close()
         if self.on_done is not None:
             self.on_done(sklad, supplier)

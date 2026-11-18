@@ -839,6 +839,11 @@ def test_file_choice_asks_sklad_and_supplier(gui, tmp_path):
     assert app._sklad == "Кореличи"
     assert app._supplier_choice == 'ООО "ОМА"'
     assert app.source_var.get() == 'Кореличи / ООО "ОМА"'
+    assert not dialog.supplier_vars['ООО "ОМА"'].get()
+    assert not hasattr(dialog, "clear_supplier_btn")
+    app.ask_source()
+    assert not app._source_dialog.supplier_vars['ООО "ОМА"'].get()
+    assert app._supplier_choice == 'ООО "ОМА"'
 
 
 def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
@@ -858,7 +863,7 @@ def test_sklad_goes_to_folder_and_matcher(gui, tmp_path):
     import datetime as dt
 
     today = f"{dt.date.today():%d.%m.%Y}"
-    assert planned == str(out_dir / "Мир" / "ООО ОМА" / f"{today}.xlsx"), planned
+    assert planned == str(out_dir / "Мир" / f"Мир ООО ОМА {today}.xlsx"), planned
 
     app.on_save()
     _run(app)
@@ -963,3 +968,16 @@ def test_exact_barcode_with_low_name_similarity_is_pink(gui, monkeypatch):
     assert app._is_mismatch(stored)
     monkeypatch.setattr(module.app_settings, "load_settings", lambda: {"name_threshold": 0})
     assert not app._is_mismatch(stored)
+
+
+def test_new_items_are_not_pink(gui):
+    from types import SimpleNamespace
+    app, _, _ = gui
+    key = ("file.xls", "sheet", 1)
+    entry = SimpleNamespace(skipped=False, matched=False, ved_row=None)
+    app._matcher = SimpleNamespace(by_key={key: entry})
+    stored = {"key": key}
+    app._preview_rows["row1"] = stored
+    assert not app._is_mismatch(stored)
+    app._retag_row("row1", stored)
+    assert app.preview.row_tags["row1"] == ("even",)

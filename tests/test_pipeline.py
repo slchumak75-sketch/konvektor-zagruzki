@@ -420,7 +420,7 @@ def test_unavailable_folder_raises_clear_error(known_paths, tmp_path):
 
 # ------------------------------------------- папка «склад / поставщик / дата»
 def test_output_path_with_sklad_and_supplier():
-    """1.7.0: при выбранном складе — <папка>/<склад>/<поставщик>/<дата>.xlsx."""
+    """1.7.0: при выбранном складе — <папка>/<склад>/<склад поставщик дата>.xlsx."""
     import datetime as dt
 
     from konvektor.meta import DocMeta
@@ -429,15 +429,15 @@ def test_output_path_with_sklad_and_supplier():
     day = dt.date(2026, 11, 15)
     meta = DocMeta(supplier='ООО "ОМА"')
     path = output_path_for(meta, "/tmp/база", date=day, sklad="Мир")
-    assert path == os.path.join("/tmp/база", "Мир", "ООО ОМА", "15.11.2026.xlsx"), path
+    assert path == os.path.join("/tmp/база", "Мир", "Мир ООО ОМА 15.11.2026.xlsx"), path
 
     # поставщик, выбранный пользователем, важнее найденного в документе
     path = output_path_for(meta, "/tmp/база", date=day, sklad="Кореличи", supplier="ООО ТД Комплект")
-    assert path == os.path.join("/tmp/база", "Кореличи", "ООО ТД Комплект", "15.11.2026.xlsx")
+    assert path == os.path.join("/tmp/база", "Кореличи", "Кореличи ООО ТД Комплект 15.11.2026.xlsx")
 
     # поставщика нет ни там, ни там — понятное имя папки
     path = output_path_for(DocMeta(), "/tmp/база", date=day, sklad="Мир")
-    assert path.endswith(os.path.join("Мир", "Поставщик не определён", "15.11.2026.xlsx"))
+    assert path.endswith(os.path.join("Мир", "Мир Поставщик не определён 15.11.2026.xlsx"))
 
     # без склада — прежнее имя файла
     assert output_path_for(meta, "/tmp/база", date=day).endswith("ООО ОМА 15.11.2026.xlsx")
@@ -452,7 +452,7 @@ def test_convert_puts_file_into_sklad_supplier_folder(known_paths, tmp_path):
     first = convert([str(path)], "", options)
     assert first.outputs, first.notes
     today = f"{dt.date.today():%d.%m.%Y}"
-    expected = tmp_path / "Кореличи" / "ООО ОМА" / f"{today}.xlsx"
+    expected = tmp_path / "Кореличи" / f"Кореличи ООО ОМА {today}.xlsx"
     assert first.outputs[0] == str(expected)
     assert expected.exists()
 
@@ -550,3 +550,11 @@ def test_tsvetogamma_embedded_barcodes_and_names(tmp_path):
     data = load_workbook(result.outputs[0])["Данные"]
     assert data.cell(2, 1).value == "4812355010858"
     assert data.cell(2, 3).value == "Эмаль ПФ-115 белая ТУ 0,8кг"
+
+
+def test_output_path_multiple_suppliers_sorted_and_sanitized():
+    from konvektor.pipeline import output_path_for
+    from konvektor.meta import DocMeta
+    day = dt.date(2026, 11, 15)
+    path = output_path_for(DocMeta(), "/tmp/база", date=day, sklad="Мир", supplier="Альфа, Бета")
+    assert path == os.path.join("/tmp/база", "Мир", "Мир Альфа, Бета 15.11.2026.xlsx")

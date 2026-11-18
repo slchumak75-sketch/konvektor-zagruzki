@@ -6,8 +6,7 @@
 
 Особенности, заданные заказчиком:
   * файл обрабатывается по одному; после конвертации список очищается сам;
-  * файл результата сохраняется как «поставщик / дата документа.xlsx»
-    (папка поставщика создаётся автоматически);
+  * файл результата сохраняется в папку склада с именем «склад поставщик дата.xlsx»;
   * в таблицу всегда добавляются колонки «файл» и «строка»;
   * журнала нет — вместо него предпросмотр готовой таблицы.
 
@@ -277,7 +276,6 @@ class KonvertorApp(_Base):
         file_menu.add_command(label="Загрузить ведомость…", command=self.on_load_vedomost)
         file_menu.add_separator()
         file_menu.add_command(label="Склад и поставщик…", command=self.on_choose_source)
-        file_menu.add_command(label="Папка сохранения…", command=self.on_browse_output)
         file_mb["menu"] = file_menu
         file_mb.pack(side="left", padx=(0, 6))
 
@@ -373,8 +371,8 @@ class KonvertorApp(_Base):
         # строки, где название выбрано/вписано вручную — светло-жёлтые
         self.preview.tag_configure("manual", background="#FFF7E0")
         # подсветка: штрихкод/артикул совпал полностью, а имя ниже порога X — розовая
-        self.preview.tag_configure("mismatch", background="#FFE4E6", foreground="#991B1B")
-        self.preview.tag_configure("mismatch_odd", background="#FECDD3", foreground="#991B1B")
+        self.preview.tag_configure("mismatch", background="#FFF1F2", foreground="#991B1B")
+        self.preview.tag_configure("mismatch_odd", background="#FFF1F2", foreground="#991B1B")
         # кратковременная подсветка при копировании штрихкода
         self.preview.tag_configure("copied", background="#C8E6C9")
         # без ведомости двух «лишних» колонок нет — таблица как раньше, 10 колонок
@@ -805,7 +803,7 @@ class KonvertorApp(_Base):
             self,
             self.suppliers_of_vedomost(),
             self._sklad,
-            self._supplier_choice,
+            "",  # новый выбор: прошлые отметки не переносятся
             on_done=self._source_chosen,
         )
         self._source_dialog = dialog
@@ -829,7 +827,7 @@ class KonvertorApp(_Base):
         if self._sklad:
             self.hint_var.set(
                 "Результат будет сохранён в папке "
-                f"«{self._sklad}{os.sep}{self._supplier_choice or 'Поставщик не определён'}»."
+                f"«{self._sklad}» с указанием поставщика в имени файла."
             )
         else:
             self.hint_var.set("Склад не выбран — файл сохранится сразу в папку «Путь».")
@@ -1314,12 +1312,12 @@ class KonvertorApp(_Base):
         return [self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
 
     def _is_mismatch(self, stored: dict) -> bool:
-        """Розовый: нет автоподбора или сходство названий ниже порога."""
+        """Розовый: у подобранной позиции сходство названий ниже порога."""
         entry = self._entry_for(stored["key"])
         if entry is None or entry.skipped or stored["key"] in self._overrides:
             return False
         if not entry.matched:
-            return True
+            return False
         # entry.row — номер в документе; название ведомости хранится в ved_row.
         row = entry.ved_row
         if row is None:
