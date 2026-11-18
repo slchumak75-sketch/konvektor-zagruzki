@@ -1370,11 +1370,11 @@ class KonvektorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             bbox = None
         x = y = 0
-        width = 460
+        width = 640
         if bbox:
             x = int(bbox[0])
             y = int(bbox[1] + bbox[3])
-            width = max(360, int(bbox[2]) + 60)
+            width = max(640, int(bbox[2]) + 120)
         try:
             left = self.preview.winfo_rootx() + x
             top = self.preview.winfo_rooty() + y
