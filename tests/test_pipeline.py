@@ -562,3 +562,19 @@ def test_delfa_correct_name_barcode_and_amount(tmp_path):
     for cells in ws.iter_rows(min_row=2, max_row=24, values_only=True):
         assert cells[1] in (None, "")
         assert cells[2] and not str(cells[2]).replace(".", "").isdigit()
+
+
+def test_farben_vat_and_discount_columns(tmp_path):
+    from pathlib import Path
+    sample = Path(__file__).parent / "fixtures" / "фарбен бел Мир.xls"
+    out = tmp_path / "result.xlsx"
+    result = convert([str(sample)], str(out))
+    assert result.items_count == 225
+    assert result.error_count == 0
+    assert result.warning_count == 0
+    assert result.computed_count == 0
+    ws = load_workbook(out)["Данные"]
+    assert [ws.cell(2, c).value for c in (5, 6, 7, 8, 9, 10)] == [4, 7.5, 30, 20, 6, 36]
+    # Скидка есть: сумма после скидки 8.28, а не 8.72 до скидки.
+    discounted = next(i for i in result.items if i.row == 58)
+    assert (discounted.price, discounted.total_sum, discounted.vat_rate, discounted.vat_sum, discounted.sum_with_vat) == (8.28, 8.28, 20, 1.66, 9.94)

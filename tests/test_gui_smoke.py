@@ -1028,3 +1028,28 @@ def test_header_shows_document_supplier_without_placeholder(gui):
     assert app.source_var.get() == 'Мир / ООО "ОМА"'
     app.on_clear_table()
     assert app.source_var.get() == "Мир"
+
+
+def test_barcode_highlight_only_when_document_code_is_in_vedomost(gui):
+    from types import SimpleNamespace
+    from konvektor.extract import Item
+    from konvektor.vedomost import Vedomost, VedRow, MatchEntry
+    app, _, _ = gui
+    code = "4812355010858"
+    app._vedomost = Vedomost(rows=[VedRow(nomenclature="Товар", barcode=code)]).build_index()
+    keys = [("x.xls", "s", i) for i in range(1, 4)]
+    entries = {keys[0]: MatchEntry(key=keys[0], doc_barcode=code),
+               keys[1]: MatchEntry(key=keys[1], doc_barcode="4812355010889"),
+               keys[2]: MatchEntry(key=keys[2], doc_barcode="")}
+    app._matcher = SimpleNamespace(by_key=entries)
+    for key, displayed in zip(keys, [code, "4812355010889", code]):
+        item = Item(source=key[0], sheet=key[1], row=key[2], barcode=displayed)
+        row = app.preview.insert("", "end", values=[displayed])
+        app._preview_rows[row] = {"key": key, "item": item}
+    assert [app._barcode_in_vedomost(app._preview_rows[r]) for r in app._preview_rows] == [True, False, False]
+    app._refresh_barcode_highlights()
+    assert len(app._barcode_highlights) == 1
+    label = next(iter(app._barcode_highlights.values()))
+    assert label.cget("background") == "#EDFFD9"
+    app._clear_preview()
+    assert not app._barcode_highlights

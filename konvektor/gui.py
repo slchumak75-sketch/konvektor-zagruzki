@@ -42,6 +42,7 @@ from .vedomost import (
     MATCH_TITLES,
     Matcher,
     load_vedomost,
+    norm_barcode,
 )
 from .pick import (
     CHOICE_CUSTOM,
@@ -191,6 +192,8 @@ class KonvertorApp(_Base):
         self._overrides: dict = {}
         # строки таблицы: id строки -> {"item": позиция, "key": ключ сверки}
         self._preview_rows: dict = {}
+        self._barcode_highlights: dict = {}
+        self._barcode_refresh_pending = False
         # склад и поставщик, выбранные в диалоге при загрузке файла
         self._sklad = ""
         self._supplier_choice = ""
@@ -398,13 +401,22 @@ class KonvertorApp(_Base):
 
         yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self._preview_yview)
         xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self._preview_xview)
-        self.preview.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        def yscroll_update(first, last):
+            yscroll.set(first, last)
+            self._schedule_barcode_highlights()
+        def xscroll_update(first, last):
+            xscroll.set(first, last)
+            self._schedule_barcode_highlights()
+        self.preview.configure(yscrollcommand=yscroll_update, xscrollcommand=xscroll_update)
         yscroll.pack(side="right", fill="y")
         xscroll.pack(side="bottom", fill="x")
         self.preview.pack(side="left", fill="both", expand=True)
         # «▾» справа от названия открывает список номенклатуры ведомости
         self.preview.bind("<Button-1>", self._on_preview_click)
         self.preview.bind("<Double-1>", self._on_preview_double_click)
+        self.preview.bind("<Configure>", self._schedule_barcode_highlights)
+        self.preview.bind("<ButtonRelease-1>", self._schedule_barcode_highlights, add="+")
+        self.preview.bind("<KeyRelease>", self._schedule_barcode_highlights, add="+")
         # прокрутка и колесо закрывают открытый список/поле ввода: иначе они
         # «висят» поверх уехавшей строки
         self.preview.bind("<MouseWheel>", self._on_preview_wheel)
@@ -1258,6 +1270,7 @@ class KonvertorApp(_Base):
 
         # две «лишние» колонки нужны только при загруженной ведомости
         self._update_preview_columns()
+        self._schedule_barcode_highlights()
         if not items:
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
 
@@ -1368,44 +1381,68 @@ class KonvertorApp(_Base):
             return
         row_id, title = target
         if title == "Штрихкод":
-            stored = self._preview_rows.get(row_id)
-            if stored is not None:
-                barcode = str(stored["item"].barcode or "").strip()
-                if barcode:
-                    try:
-                        self.clipboard_clear()
-                        self.clipboard_append(barcode)
-                        self.update()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        box = self.preview.bbox(row_id, "#1")
-                        if box:
-                            x, y, w, h = box
-                            parent = self.preview.master or self.preview
-                            flash = tk.Label(
-                                parent,
-                                text=barcode,
-                                background="#C8E6C9",
-                                foreground="#1B5E20",
-                                font=("Segoe UI", 11, "bold"),
-                                relief="solid",
-                                bd=1,
-                                anchor="w",
-                                padx=4,
-                            )
-                            flash.place(x=x, y=y, width=w, height=h)
-                            flash.lift()
-                            self.after(1000, flash.destroy)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    self.hint_var.set(f"✓ Штрихкод {barcode} скопирован в буфер обмена.")
+            self._copy_barcode(row_id)
             return
         if self._vedomost is None or self._matcher is None:
             return
         if title != COLUMN_PICK:
             return
         self.open_chooser(row_id)
+
+    def _copy_barcode(self, row_id: str) -> None:
+        stored = self._preview_rows.get(row_id)
+        if stored is None:
+            return
+        barcode = str(stored["item"].barcode or "").strip()
+        if not barcode:
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(barcode)
+        except Exception:  # noqa: BLE001
+            pass
+        self.hint_var.set(f"✓ Штрихкод {barcode} скопирован в буфер обмена.")
+
+    def _barcode_in_vedomost(self, stored: dict) -> bool:
+        """Совпадение кода из документа, а не кода, дописанного из ведомости."""
+        if self._vedomost is None:
+            return False
+        entry = self._entry_for(stored["key"])
+        if entry is None:
+            return False
+        code = norm_barcode(entry.doc_barcode)
+        return bool(code and code in self._vedomost._by_barcode)
+
+    def _schedule_barcode_highlights(self, _event=None) -> None:
+        if not self._barcode_refresh_pending:
+            self._barcode_refresh_pending = True
+            self.after(0, self._refresh_barcode_highlights)
+
+    def _refresh_barcode_highlights(self) -> None:
+        # Treeview поддерживает цвет строки, но не ячейки: видимые совпавшие
+        # штрихкоды показываем поверх соответствующих ячеек отдельными метками.
+        self._barcode_refresh_pending = False
+        for widget in self._barcode_highlights.values():
+            widget.destroy()
+        self._barcode_highlights.clear()
+        for row_id, stored in self._preview_rows.items():
+            if not self._barcode_in_vedomost(stored):
+                continue
+            try:
+                box = self.preview.bbox(row_id, "#1")
+                if not box:
+                    continue
+                x, y, width, height = box
+                label = tk.Label(self.preview, text=str(stored["item"].barcode or ""),
+                                 background="#EDFFD9", foreground=TEXT, font=("Segoe UI", 11),
+                                 anchor="w", padx=4, bd=0)
+                label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
+                label.bind("<Button-1>", lambda _event, rid=row_id: self._copy_barcode(rid))
+                for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                    label.bind(event, self._on_preview_wheel)
+                self._barcode_highlights[row_id] = label
+            except Exception:  # noqa: BLE001 - подсветка не должна мешать работе
+                continue
 
     def _on_preview_double_click(self, event) -> None:
         """Двойной щелчок по «Из ведомости»/«▾» — тот же список."""
@@ -1797,6 +1834,7 @@ class KonvertorApp(_Base):
         except Exception:  # noqa: BLE001 - не критично
             pass
         self._retag_row(row_id, stored)
+        self._schedule_barcode_highlights()
 
     @staticmethod
     def _fmt(value, column: str = "") -> str:
@@ -1825,6 +1863,9 @@ class KonvertorApp(_Base):
     def _clear_preview(self) -> None:
         self._close_popups()
         self._preview_rows.clear()
+        for widget in self._barcode_highlights.values():
+            widget.destroy()
+        self._barcode_highlights.clear()
         for child in self.preview.get_children():
             self.preview.delete(child)
 
