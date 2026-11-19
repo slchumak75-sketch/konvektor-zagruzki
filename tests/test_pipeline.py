@@ -578,3 +578,37 @@ def test_farben_vat_and_discount_columns(tmp_path):
     # Скидка есть: сумма после скидки 8.28, а не 8.72 до скидки.
     discounted = next(i for i in result.items if i.row == 58)
     assert (discounted.price, discounted.total_sum, discounted.vat_rate, discounted.vat_sum, discounted.sum_with_vat) == (8.28, 8.28, 20, 1.66, 9.94)
+
+
+def test_komplekt_information_sheet_supplements_barcodes_without_duplicates(tmp_path):
+    from pathlib import Path
+    from konvektor.vedomost import Vedomost, VedRow, Matcher, MATCH_BARCODE
+    sample = Path(__file__).parent / "fixtures" / "компл мир 1.xls"
+    code = "4810992023859"
+    ved = Vedomost(rows=[VedRow(nomenclature="Шпилька М16х1000", barcode=code)]).build_index()
+    matcher = Matcher(ved, strategy=MATCH_BARCODE)
+    result = convert([str(sample)], str(tmp_path / "комплект.xlsx"), ConvertOptions(matcher=matcher))
+    assert result.items_count == 195
+    assert result.error_count == 0
+    item = next(i for i in result.items if i.article == "SM-83264")
+    assert item.sheet == "Приложение" and item.row == 211
+    assert item.barcode == code
+    assert matcher.by_key[(item.source, item.sheet, item.row)].doc_barcode == code
+    assert next(i for i in result.items if i.row == 108).barcode == "4810992083747"
+    ws = load_workbook(result.outputs[0])["Данные"]
+    assert ws.max_row == 197
+
+
+def test_information_sheet_merge_refuses_ambiguous_or_conflicting_rows():
+    from konvektor.extract import Item, _supplement_info_barcodes
+    def row(name, code):
+        return Item(source="x", sheet="s", row=1, name=name, qty=1, price=2, total_sum=2, vat_sum=.4, sum_with_vat=2.4, barcode=code)
+    main = row("Товар", None)
+    assert not _supplement_info_barcodes([main], [row("Другой товар", "4810992023859")])
+    assert main.barcode is None
+    assert not _supplement_info_barcodes([row("Товар", None), row("Товар", None)],
+                                         [row("Товар", "4810992023859"), row("Товар", "4810992023811")])
+    assert not _supplement_info_barcodes([row("Товар", "4810992023811")], [row("Товар", "4810992023859")])
+    info = row("Товар", "4810992023859")
+    assert _supplement_info_barcodes([main], [info])
+    assert main.barcode == "4810992023859"

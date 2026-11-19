@@ -128,3 +128,9 @@ def test_parse_rate():
 def test_fmt_money():
     assert fmt_money(1234.5) == "1 234,50"
     assert fmt_money(None) == ""
+
+
+def test_labeled_long_article_is_not_a_barcode():
+    assert find_barcode_in_text("Напильник, арт.1101230957009 (Россия)") is None
+    assert find_barcode_in_text("1101230957009 - артикул. Импортер") is None
+    assert find_barcode_in_text("арт.1101230957009 штрихкод 4810992083747") == "4810992083747"

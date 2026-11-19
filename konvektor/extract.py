@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 
 from . import detect, layout
@@ -339,13 +341,77 @@ def _only_name_text(values: List[Any], h: HeaderInfo) -> bool:
     return len(txt) >= 10 and txt[:2].upper() not in ("I.", "II")
 
 
+def _supplement_info_barcodes(main_items: List[Item], info_items: List[Item]) -> bool:
+    """Объединить только полностью и однозначно совпадающие товарные листы.
+
+    Сверяем наименование и все денежные поля, а не положение строки: порядок
+    листов может отличаться. Неизвестные/повторяющиеся позиции не объединяем.
+    """
+    if not main_items or len(main_items) != len(info_items):
+        return False
+
+    def key(item: Item):
+        if item.qty is None or item.price is None or item.total_sum is None:
+            return None
+        return (item.qty, item.price, item.total_sum, item.vat_sum, item.sum_with_vat)
+
+    def same_name(main: str, info: str) -> bool:
+        a = clean_text(main).casefold().replace("ё", "е").strip(" .")
+        b = clean_text(info).casefold().replace("ё", "е").strip(" .")
+        if a == b:
+            return True
+        # В накладной после названия может быть добавлена страна в скобках.
+        if not a.startswith(b):
+            return False
+        rest = a[len(b):].strip(" .")
+        return bool(re.fullmatch(r"\([^()]{1,40}\)", rest))
+
+    candidates = defaultdict(list)
+    for item in main_items:
+        k = key(item)
+        if k is None:
+            return False
+        candidates[k].append(item)
+    used = set()
+    pairs = []
+    for info in info_items:
+        k = key(info)
+        if k is None:
+            return False
+        matches = [item for item in candidates.get(k, ()) if same_name(item.name, info.name)]
+        # Повторы с одинаковым именем и ценой неоднозначны даже при том же порядке.
+        if len(matches) != 1 or id(matches[0]) in used:
+            return False
+        main = matches[0]
+        if main.barcode and info.barcode and main.barcode != info.barcode:
+            return False
+        used.add(id(main))
+        pairs.append((main, info))
+    for main, info in pairs:
+        if not main.barcode and info.barcode:
+            main.barcode = info.barcode
+    return True
+
+
 def extract_file(sf: SourceFile) -> SheetExtraction:
     """Разобрать все листы файла."""
     total = SheetExtraction()
-    for sheet in sf.sheets:
-        part = extract_sheet(sf, sheet)
-        total.items.extend(part.items)
-        total.totals.extend(part.totals)
+    parts = [(sheet, extract_sheet(sf, sheet)) for sheet in sf.sheets]
+    main_items = [item for sheet, part in parts
+                  if "информационн" not in sheet.name.casefold()
+                  for item in part.items]
+    merged = set()
+    for index, (sheet, part) in enumerate(parts):
+        if ("информационн" in sheet.name.casefold() and part.items
+                and _supplement_info_barcodes(main_items, part.items)):
+            merged.add(index)
+            total.decisions.append(layout.AnalysisDecision(
+                "barcode", "штрихкоды взяты с совпадающего информационного листа",
+                {"лист": sheet.name, "позиций": len(part.items)}))
+    for index, (sheet, part) in enumerate(parts):
+        if index not in merged:
+            total.items.extend(part.items)
+            total.totals.extend(part.totals)
         total.warnings.extend(part.warnings)
         total.decisions.extend(part.decisions)
         total.blocks.extend(part.blocks)

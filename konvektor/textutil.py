@@ -228,7 +228,10 @@ def find_barcode_in_text(text: Any) -> Optional[str]:
     s = to_text(text)
     if not s:
         return None
-    cands = [m.group(1) for m in _BC.finditer(s)]
+    # Последовательность после «арт.» — артикул, даже если она похожа на EAN.
+    cands = [m.group(1) for m in _BC.finditer(s)
+             if not re.search(r"(?:арт(?:икул)?\.?|article)\s*[:№#.-]?\s*$", s[:m.start(1)], re.IGNORECASE)
+             and not re.match(r"\s*[-–—:]\s*артикул\b", s[m.end(1):], re.IGNORECASE)]
     cands = [c for c in cands if not c.strip("0") == ""]
     if not cands:
         return None
