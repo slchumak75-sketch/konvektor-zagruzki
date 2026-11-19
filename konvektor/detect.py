@@ -104,6 +104,11 @@ def classify_header(value: Any) -> Optional[Tuple[str, float]]:
     if not t:
         return None
 
+    # Полное название товара может включать слова «артикул», «цена» и
+    # «страна» в пояснении — это всё равно колонка наименования.
+    if re.match(r"^(?:наимен|номенклатур)", t):
+        return (NAME, 3.0)
+
     if any(x in t for x in _REJECT):
         return None
 
@@ -141,14 +146,15 @@ def classify_header(value: Any) -> Optional[Tuple[str, float]]:
     if "кол" in t or "к-во" in t or "количество" in t or "qty" in t or "количест" in t:
         return (QTY, 3.0)
 
+    # «Стоимость продукции/товара» — сумма, не наименование.
+    if "сумм" in t or "стоимост" in compact:
+        return (SUM, 2.0)
+
     if any(x in t for x in _NAME_HINTS):
         return (NAME, 3.0)
 
     if ("ед" in t and "изм" in t) or t in ("ед", "ед.", "единица", "ед.изм", "ед. изм", "ед. измер"):
         return (UNIT, 3.0)
-
-    if "сумм" in t or "стоимост" in compact:
-        return (SUM, 2.0)
 
     if "код" in t or "code" in t:
         return (ARTICLE, 1.0)

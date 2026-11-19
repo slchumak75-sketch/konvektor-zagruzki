@@ -34,6 +34,8 @@ from konvektor import detect
         ("Цена", detect.PRICE),
         ("Цена шт. б/НДС, руб", detect.PRICE),
         ("Стоимость,\nруб., коп.", detect.SUM),
+        ("Стоимость продукции, в руб", detect.SUM),
+        ("Наименование продукции,товара (с указанием размера, артикула, цены и страны)", detect.NAME),
         ("Сумма", detect.SUM),
         ("Сумма без НДС,     руб. коп.", detect.SUM),
         ("Ставка \nНДС, %", detect.VAT_RATE),

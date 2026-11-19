@@ -542,3 +542,23 @@ def test_output_path_multiple_suppliers_sorted_and_sanitized():
     day = dt.date(2026, 11, 15)
     path = output_path_for(DocMeta(), "/tmp/база", date=day, sklad="Мир", supplier="Альфа, Бета")
     assert path == os.path.join("/tmp/база", "Мир", "Мир Альфа, Бета 15.11.2026.xlsx")
+
+
+def test_delfa_correct_name_barcode_and_amount(tmp_path):
+    from pathlib import Path
+    sample = Path(__file__).parent / "fixtures" / "дэльфа мир.xls"
+    out = tmp_path / "result.xlsx"
+    result = convert([str(sample)], str(out))
+    assert result.items_count == 23
+    assert result.error_count == 0
+    ws = load_workbook(out)["Данные"]
+    assert ws.cell(2, 1).value == "4810197388449"
+    assert ws.cell(2, 2).value in (None, "")
+    assert ws.cell(2, 3).value == "К-т бегунков д/пот. 100 шт. С50.5.01.00.100 РБ"
+    assert ws.cell(2, 7).value == 6.03
+    assert ws.cell(4, 3).value == "К-т бегунков-зажимов 100 шт. СЗ104021.100 д/потол.карн., белый Венгрия"
+    assert ws.cell(24, 1).value == "4810197413639"
+    assert ws.cell(24, 7).value == 62.16
+    for cells in ws.iter_rows(min_row=2, max_row=24, values_only=True):
+        assert cells[1] in (None, "")
+        assert cells[2] and not str(cells[2]).replace(".", "").isdigit()

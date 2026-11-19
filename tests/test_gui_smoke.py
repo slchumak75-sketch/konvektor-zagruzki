@@ -883,7 +883,7 @@ def test_source_line_is_visible_in_window(gui):
     app, _, _ = gui
     assert "Склад и поставщик…" in fake_tk.TEXTS
     app._source_chosen("Кореличи", "")
-    assert app.source_var.get() == "Кореличи / как в документе"
+    assert app.source_var.get() == "Кореличи"
 
 
 def known_sample_paths():
@@ -1005,7 +1005,7 @@ def test_header_displays_selected_sklad_and_suppliers(gui):
     app._source_chosen("Мир", 'ООО "ОМА", ООО Альфа')
     assert app.source_var.get() == 'Мир / ООО "ОМА", ООО Альфа'
     app._source_chosen("Кореличи", "")
-    assert app.source_var.get() == "Кореличи / как в документе"
+    assert app.source_var.get() == "Кореличи"
 
 
 def test_settings_menu_does_not_offer_save_settings(gui):
@@ -1013,3 +1013,18 @@ def test_settings_menu_does_not_offer_save_settings(gui):
     menu = app.table_mb.options["menu"]
     assert not any(item.get("label") == "Сохранить настройки" for item in menu.items)
     assert any(item.get("label") == "Сохранить поля таблицы" for item in menu.items)
+
+
+def test_header_shows_document_supplier_without_placeholder(gui):
+    app, _, _ = gui
+    app._source_chosen("Мир", "")
+    assert app.source_var.get() == "Мир"
+    app.on_convert()
+    _run(app)
+    assert app.source_var.get() == 'Мир / ООО "ОМА"'
+    app._source_chosen("Мир", "Другой поставщик")
+    assert app.source_var.get() == "Мир / Другой поставщик"
+    app._source_chosen("Мир", "")
+    assert app.source_var.get() == 'Мир / ООО "ОМА"'
+    app.on_clear_table()
+    assert app.source_var.get() == "Мир"

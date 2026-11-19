@@ -194,6 +194,7 @@ class KonvertorApp(_Base):
         # склад и поставщик, выбранные в диалоге при загрузке файла
         self._sklad = ""
         self._supplier_choice = ""
+        self._document_suppliers = ""
         # открытый выпадающий список номенклатуры ведомости
         self._chooser = None
         self._chooser_row: Optional[str] = None
@@ -263,7 +264,7 @@ class KonvertorApp(_Base):
         self.file_var = tk.StringVar(value="файл не выбран")
         self.ved_var = tk.StringVar(value="не загружена")
         self.out_var = tk.StringVar(value=documents_dir())
-        self.source_var = tk.StringVar(value="не выбраны")
+        self.source_var = tk.StringVar(value="")
 
         # панель кнопок на синем фоне (сгруппирована в выпадающие меню)
         nav = tk.Frame(header, background=NAVY)
@@ -738,7 +739,7 @@ class KonvertorApp(_Base):
                 self._sklad = data["sklad"]
             if data.get("supplier"):
                 self._supplier_choice = data["supplier"]
-                self.source_var.set(self.source_text())
+            self.source_var.set(self.source_text())
             # порог икс — для совместимости, если нет — 60
             if "name_threshold" not in data:
                 pass
@@ -842,10 +843,10 @@ class KonvertorApp(_Base):
 
     def source_text(self) -> str:
         """Строка «склад / поставщик» для синей панели."""
-        if not self._sklad:
-            return "не выбран (как в документе)"
-        supplier = self._supplier_choice or "как в документе"
-        return f"{self._sklad} / {supplier}"
+        supplier = self._supplier_choice or self._document_suppliers
+        if self._sklad and supplier:
+            return f"{self._sklad} / {supplier}"
+        return self._sklad or supplier or ""
 
     def on_add_files(self) -> None:
         path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
@@ -1131,6 +1132,9 @@ class KonvertorApp(_Base):
         self._set_busy(False)
         self._last_outputs = list(result.outputs)
         self._pending_result = result
+        names = sorted({m.supplier.strip() for m in result.metas.values() if m.supplier and m.supplier.strip()}, key=str.casefold)
+        self._document_suppliers = ", ".join(names)
+        self.source_var.set(self.source_text())
         self.save_btn.configure(state="normal" if result.items_count else "disabled")
         self._update_preview_columns()
 
@@ -1832,6 +1836,8 @@ class KonvertorApp(_Base):
                 self._log(f"пропущен (неподдерживаемый формат): {full}")
                 continue
             self.files = [full]
+            self._document_suppliers = ""
+            self.source_var.set(self.source_text())
             self.file_var.set(os.path.basename(full))
             self.hint_var.set("")
             self._log(f"выбран файл: {full}")
@@ -1853,6 +1859,8 @@ class KonvertorApp(_Base):
 
     def _clear_files(self) -> None:
         self.files.clear()
+        self._document_suppliers = ""
+        self.source_var.set(self.source_text())
         self.file_var.set("файл не выбран")
         self._update_status()
 
