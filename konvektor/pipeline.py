@@ -576,10 +576,6 @@ def convert(
         result.errors.append("Полнота строк OCR не подтверждена по оригиналу или исходный файл изменился")
         log("  файл не записан: полнота OCR не подтверждена")
         return result
-    if any(total.needs_confirmation for total in totals):
-        result.errors.append("Итоги OCR требуют подтверждения по оригиналу перед сохранением")
-        log("  файл не записан: итоги OCR не подтверждены")
-        return result
     unresolved = [item for item in all_items if item.unrecognized or item.needs_confirmation]
     if unresolved:
         result.errors.append(f"Не распознаны или не подтверждены значения в {len(unresolved)} строках: проверьте отмеченные ячейки перед сохранением")

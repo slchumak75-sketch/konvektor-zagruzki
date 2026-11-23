@@ -21,8 +21,16 @@ def main():
         rid = next(iter(app._preview_rows))
         app._refresh_barcode_highlights()
         assert (rid, "количество") in app._issue_highlights, "Подсветка OCR не показана"
-        assert (rid, "Из документа") in app._issue_highlights, "Подсветка названия не показана"
-        assert app._total_editor_vars, "Поля итога OCR отсутствуют"
+        assert app._issue_highlights[(rid, "количество")].cget("background") == "#EDFFD9", "Цвет арифметики неверен"
+        assert app.totals_table.get_children(), "Строка итогов отсутствует"
+        app.preview.column("количество", width=94)
+        app._sync_totals_columns()
+        app.update()
+        assert app.totals_table.column("количество", "width") == 94, "Ширина итога не синхронизирована"
+        total_row = app.totals_table.get_children()[0]
+        row_box = app.preview.bbox(rid, "#5")
+        total_box = app.totals_table.bbox(total_row, "#5")
+        assert row_box and total_box and abs(row_box[0] - total_box[0]) <= 2, "Итог не под колонкой"
         app.edit_source_cell(rid, "количество")
         app.update()
         assert app._editor is not None and app._editor.winfo_viewable(), "Редактор ячейки не показан"

@@ -53,6 +53,7 @@ from .pick import (
 )
 from .writer import plain_number
 from .textutil import parse_number
+from .validate import EXCLUSIVE, INCLUSIVE, MONEY_TOL, expected_vat
 from . import settings as app_settings
 
 try:  # pragma: no cover - зависит от сборки Python
@@ -420,6 +421,14 @@ class KonvertorApp(_Base):
                 stretch=(title == "Наименование товара"),
             )
 
+        # Закреплённая строка итогов — с теми же колонками, что и таблица.
+        self.totals_table = ttk.Treeview(grid_box, columns=PREVIEW_COLUMNS, show="", height=1,
+                                         style="Grid.Treeview", selectmode="none")
+        self.totals_table.configure(displaycolumns=list(PREVIEW_WITHOUT_VED))
+        self.totals_table.tag_configure("total", background="#E6EEF8", foreground=TEXT)
+        for title, width, min_width in zip(PREVIEW_COLUMNS, PREVIEW_WIDTHS, PREVIEW_MIN_WIDTHS):
+            self.totals_table.column(title, width=width, minwidth=min_width,
+                                     anchor="e" if title in _NUMERIC_PREVIEW else "w", stretch=False)
         yscroll = ttk.Scrollbar(grid_box, orient="vertical", command=self._preview_yview)
         xscroll = ttk.Scrollbar(grid_box, orient="horizontal", command=self._preview_xview)
         def yscroll_update(first, last):
@@ -427,15 +436,21 @@ class KonvertorApp(_Base):
             self._schedule_barcode_highlights()
         def xscroll_update(first, last):
             xscroll.set(first, last)
+            try:
+                self.totals_table.xview_moveto(first)
+            except (AttributeError, TypeError):
+                pass
             self._schedule_barcode_highlights()
         self.preview.configure(yscrollcommand=yscroll_update, xscrollcommand=xscroll_update)
         yscroll.pack(side="right", fill="y")
-        xscroll.pack(side="bottom", fill="x")
+        self.totals_table.pack(side="bottom", fill="x")
         self.preview.pack(side="left", fill="both", expand=True)
         # «▾» справа от названия открывает список номенклатуры ведомости
         self.preview.bind("<Button-1>", self._on_preview_click)
         self.preview.bind("<Double-1>", self._on_preview_double_click)
         self.preview.bind("<Configure>", self._schedule_barcode_highlights)
+        self.preview.bind("<Configure>", self._sync_totals_columns, add="+")
+        self.preview.bind("<ButtonRelease-1>", self._sync_totals_columns, add="+")
         self.preview.bind("<ButtonRelease-1>", self._schedule_barcode_highlights, add="+")
         self.preview.bind("<KeyRelease>", self._schedule_barcode_highlights, add="+")
         # прокрутка и колесо закрывают открытый список/поле ввода: иначе они
@@ -444,14 +459,11 @@ class KonvertorApp(_Base):
         self.preview.bind("<Button-4>", self._on_preview_wheel)
         self.preview.bind("<Button-5>", self._on_preview_wheel)
 
+        # Подписи и диагностические сообщения под таблицей не показываем.
         self.totals_var = tk.StringVar(value="")
-        ttk.Label(body, textvariable=self.totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w", pady=(4, 0))
         self.doc_totals_var = tk.StringVar(value="")
-        ttk.Label(body, textvariable=self.doc_totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w")
         self.ocr_totals_panel = ttk.Frame(body, style="Card.TFrame")
-        self.ocr_totals_panel.pack(fill="x")
         status_row = ttk.Frame(body, style="Card.TFrame")
-        status_row.pack(fill="x", pady=(4, 0))
         self.hint_var = tk.StringVar(value="")
         ttk.Label(
             status_row, textvariable=self.hint_var, style="Hint.TLabel"
@@ -1124,9 +1136,6 @@ class KonvertorApp(_Base):
         if unresolved:
             messagebox.showwarning(APP_NAME, f"В {unresolved} строках есть неподтверждённые или нераспознанные значения. Проверьте отмеченные ячейки двойным щелчком и нажмите Enter.")
             return
-        if any(t.needs_confirmation for t in self._pending_result.document_totals):
-            messagebox.showwarning(APP_NAME, "Сверьте итоговые цифры с оригиналом и нажмите «Подтвердить итог».")
-            return
         if self._pending_result.ocr_source_hashes:
             counts = []
             for path in self._pending_result.ocr_source_hashes:
@@ -1135,8 +1144,8 @@ class KonvertorApp(_Base):
             if not messagebox.askyesno(
                 APP_NAME,
                 "Проверьте по оригиналу, что все строки присутствуют и нет лишних:\n\n"
-                + "\n".join(counts) + "\n\nПодтверждаете полноту строк? "
-                "Если строки отсутствуют или лишние — нажмите «Нет» и не сохраняйте.",
+                + "\n".join(counts) + "\n\nСверили рассчитанные итоги под столбцами с оригиналом и подтвердили полноту строк? "
+                "Если строки отсутствуют, лишние или итоги не совпадают — нажмите «Нет» и не сохраняйте.",
                 default="no",
             ):
                 return
@@ -1399,41 +1408,33 @@ class KonvertorApp(_Base):
             status = " | ВНИМАНИЕ: " + "; ".join(
                 f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in discrepancies)
         self.doc_totals_var.set("Итоги из документа: " + ("; ".join(parts) if parts else "не найдены") + status)
-        self._render_ocr_total_editors(result)
+        self._update_totals_row(result)
 
-    def _render_ocr_total_editors(self, result: ConvertResult) -> None:
-        for widget in self._total_widgets:
-            widget.destroy()
-        self._total_widgets.clear()
-        self._total_editor_vars.clear()
-        for total in result.document_totals:
-            if total.source not in result.ocr_source_hashes:
-                continue
-            key = (total.source, total.sheet, total.row)
-            row = ttk.Frame(self.ocr_totals_panel, style="Card.TFrame")
-            row.pack(fill="x")
-            self._total_widgets.append(row)
-            ttk.Label(row, text=f"Итог {os.path.basename(total.source)}, {total.sheet}:").pack(side="left")
-            variables = {}
-            for field, label in (("qty", "Количество"), ("sum", "Без НДС"), ("vat_sum", "НДС"), ("total", "С НДС")):
-                ttk.Label(row, text=label).pack(side="left", padx=(5, 1))
-                value = total.values.get(field)
-                var = tk.StringVar(value=self._fmt(value) if value is not None else "???")
-                ttk.Entry(row, textvariable=var, width=10).pack(side="left")
-                variables[field] = var
-            self._total_editor_vars[key] = variables
-            label = "Подтвердить итог" if total.needs_confirmation else "Изменить итог"
-            ttk.Button(row, text=label, command=lambda k=key: self._confirm_ocr_total(k)).pack(side="left", padx=5)
+    def _sync_totals_columns(self, _event=None) -> None:
+        """Ширины итога повторяют изменённые пользователем ширины таблицы."""
+        for title in PREVIEW_COLUMNS:
+            try:
+                width = self.preview.column(title, "width")
+                self.totals_table.column(title, width=width)
+            except Exception:  # noqa: BLE001 - в старой теме Tk ширина может быть недоступна
+                pass
 
-    def _confirm_ocr_total(self, key) -> None:
-        if self._running or key not in self._total_editor_vars:
+    def _update_totals_row(self, result: ConvertResult) -> None:
+        for row in self.totals_table.get_children():
+            self.totals_table.delete(row)
+        if not result.items:
             return
-        values = {field: parse_number(var.get()) for field, var in self._total_editor_vars[key].items()}
-        if any(value is None for value in values.values()):
-            messagebox.showwarning(APP_NAME, "Сверьте с оригиналом и введите все четыре числа итога.")
-            return
-        self._ocr_total_edits[key] = values
-        self._start_convert(list(self._pending_sources), self._strategy, write=False, quiet=True)
+        values = {COLUMN_FROM_DOC: "ИТОГО"}
+        for title, attr in (("количество", "qty"), ("сумма", "total_sum"),
+                            ("сумма НДС", "vat_sum"), ("сумма с НДС", "sum_with_vat")):
+            numbers = [getattr(item, attr) for item in result.items]
+            unknown = any(value is None or attr in item.unrecognized for item, value in zip(result.items, numbers))
+            pending = any(attr in item.needs_confirmation for item in result.items)
+            precision = 3 if attr == "qty" else 2
+            text = "???" if unknown else self._fmt(round(sum(numbers), precision), title)
+            values[title] = text + (" *" if pending else "")
+        self.totals_table.insert("", "end", values=[values.get(c, "") for c in PREVIEW_COLUMNS], tags=("total",))
+        self._sync_totals_columns()
 
     def _update_preview_columns(self) -> None:
         """Показать/скрыть колонки «Из ведомости», «▾» и «% совпадения»."""
@@ -1441,12 +1442,14 @@ class KonvertorApp(_Base):
         columns = PREVIEW_COLUMNS if with_vedomost else PREVIEW_WITHOUT_VED
         try:
             self.preview.configure(displaycolumns=list(columns))
+            self.totals_table.configure(displaycolumns=list(columns))
+            self._sync_totals_columns()
         except Exception:  # noqa: BLE001 - оформление не критично
             pass
         # подсказка про правку нужна только когда есть что править
         try:
             self.edit_hint.configure(
-                text="Двойной щелчок по значению документа — исправить, Enter — проверить; Esc — отменить."
+                text="Двойной щелчок — исправить, Enter — проверить; * — значение OCR требует сверки."
                 + (" «▼» — выбрать позицию ведомости." if with_vedomost else "")
             )
         except Exception:  # noqa: BLE001 - не критично
@@ -1496,8 +1499,14 @@ class KonvertorApp(_Base):
             item.vat_sum,
             item.sum_with_vat,
         ]
-        return ["???" if _EDITABLE_SOURCE.get(title) in item.unrecognized
-                else self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
+        formatted = []
+        for value, title in zip(values, PREVIEW_COLUMNS):
+            field = _EDITABLE_SOURCE.get(title)
+            text = "???" if field in item.unrecognized else self._fmt(value, title)
+            if field in item.needs_confirmation:
+                text += " *"
+            formatted.append(text)
+        return formatted
 
     def _is_mismatch(self, stored: dict) -> bool:
         """Розовый: у подобранной позиции сходство названий ниже порога."""
@@ -1610,35 +1619,51 @@ class KonvertorApp(_Base):
             except Exception:  # noqa: BLE001 - подсветка не должна мешать работе
                 continue
 
+    @staticmethod
+    def _row_math_ok(item: Item, report) -> bool:
+        """Зелёный только если все три формулы можно независимо проверить."""
+        attrs = ("qty", "price", "total_sum", "vat_rate", "vat_sum", "sum_with_vat")
+        if any(getattr(item, name) is None or name in item.unrecognized for name in attrs):
+            return False
+        if item.computed or report is None or item.source not in report.vat_mode:
+            return False
+        mode = report.vat_mode[item.source]
+        if mode not in (EXCLUSIVE, INCLUSIVE):
+            return False
+        base = round(item.qty * item.price, 2)
+        vat = expected_vat(item.total_sum, item.vat_rate, mode)
+        total = item.total_sum if mode == INCLUSIVE else item.total_sum + item.vat_sum
+        return (abs(base - item.total_sum) <= MONEY_TOL
+                and vat is not None and abs(vat - item.vat_sum) <= MONEY_TOL
+                and abs(round(total, 2) - item.sum_with_vat) <= MONEY_TOL)
+
     def _draw_issue_highlights(self) -> None:
-        """Treeview не красит ячейки: поверх видимых ошибок ставим метки."""
+        """Красим только числовую часть: вся строка зелёная или розовая."""
         result = self._pending_result
         if result is None or result.report is None:
             return
-        issue_fields = {(i.source, i.sheet, i.row, i.field) for i in result.report.issues
-                        if i.severity in ("error", "warning") and i.field in _NUMERIC_PREVIEW}
         columns = PREVIEW_COLUMNS if self._vedomost is not None else PREVIEW_WITHOUT_VED
         for row_id, stored in self._preview_rows.items():
             item = stored["item"]
-            for title in set(_NUMERIC_PREVIEW) | {COLUMN_FROM_DOC, "ед. изм.", "Штрихкод"}:
-                unknown = _EDITABLE_SOURCE[title] in item.unrecognized
-                needs_review = _EDITABLE_SOURCE[title] in item.needs_confirmation
-                if not unknown and not needs_review and (item.source, item.sheet, item.row, title) not in issue_fields:
-                    continue
+            color = "#EDFFD9" if self._row_math_ok(item, result.report) else "#FFF1F2"
+            for title in _NUMERIC_PREVIEW:
                 try:
                     box = self.preview.bbox(row_id, f"#{columns.index(title) + 1}")
                     if not box:
                         continue
                     x, y, width, height = box
-                    value = "???" if unknown else self._fmt(getattr(item, _EDITABLE_SOURCE[title]), title)
-                    label = tk.Label(self.preview, text=value, background="#FFD5A6", foreground=TEXT,
+                    field = _EDITABLE_SOURCE[title]
+                    value = "???" if field in item.unrecognized else self._fmt(getattr(item, field), title)
+                    if field in item.needs_confirmation:
+                        value += " *"
+                    label = tk.Label(self.preview, text=value, background=color, foreground=TEXT,
                                      font=("Segoe UI", 11), anchor="e", padx=4, bd=0)
                     label.place(x=x+1, y=y+1, width=max(1, width-2), height=max(1, height-2))
                     label.bind("<Double-1>", lambda _event, rid=row_id, t=title: self.edit_source_cell(rid, t))
                     for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                         label.bind(event, self._on_preview_wheel)
                     self._issue_highlights[(row_id, title)] = label
-                except Exception:  # noqa: BLE001 - ошибка оформления не должна ломать таблицу
+                except Exception:  # noqa: BLE001 - оформление не должно ломать таблицу
                     continue
 
     def _on_preview_double_click(self, event) -> None:
@@ -2119,6 +2144,8 @@ class KonvertorApp(_Base):
         self.doc_totals_var.set("")
         for child in self.preview.get_children():
             self.preview.delete(child)
+        for child in self.totals_table.get_children():
+            self.totals_table.delete(child)
 
     def _add_files(self, paths: List[str]) -> None:
         """Новый выбор заменяет предыдущий; страницы сортируются по номеру."""

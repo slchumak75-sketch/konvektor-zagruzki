@@ -1156,7 +1156,7 @@ def test_arithmetic_highlight_is_removed_after_correction(gui):
     _run(app)
     rid = next(iter(app._preview_rows))
     app._refresh_barcode_highlights()
-    assert (rid, "сумма") in app._issue_highlights
+    assert app._issue_highlights[(rid, "сумма")].cget("background") == "#FFF1F2"
     assert app.totals_var.get().startswith("По всем строкам таблицы:")
     assert app.doc_totals_var.get().startswith("Итоги из документа:")
     app.edit_source_cell(rid, "количество")
@@ -1165,7 +1165,8 @@ def test_arithmetic_highlight_is_removed_after_correction(gui):
     _run(app)
     rid = next(iter(app._preview_rows))
     app._refresh_barcode_highlights()
-    assert (rid, "сумма") not in app._issue_highlights
+    expected = "#EDFFD9" if app._row_math_ok(app._preview_rows[rid]["item"], app._pending_result.report) else "#FFF1F2"
+    assert app._issue_highlights[(rid, "сумма")].cget("background") == expected
 
 
 def test_pdf_page_grouping_requires_explicit_confirmation(gui, monkeypatch, tmp_path):
@@ -1186,7 +1187,7 @@ def test_pdf_page_grouping_requires_explicit_confirmation(gui, monkeypatch, tmp_
     assert app._document_groups == []
 
 
-def test_scanned_total_and_rows_must_be_confirmed_before_saving(gui, monkeypatch, tmp_path):
+def test_scanned_rows_must_be_confirmed_and_footer_is_computed(gui, monkeypatch, tmp_path):
     from konvektor.extract import DocTotal, Item, SheetExtraction
     from konvektor.readers import Sheet, SourceFile
     import konvektor.pipeline as pipeline
@@ -1211,12 +1212,10 @@ def test_scanned_total_and_rows_must_be_confirmed_before_saving(gui, monkeypatch
     _run(app)
     app.on_save()
     assert not app._last_outputs
-    key = next(iter(app._total_editor_vars))
-    app._total_editor_vars[key]["total"].set("13")
-    app._confirm_ocr_total(key)
-    _run(app)
-    assert not app._pending_result.document_totals[0].needs_confirmation
-    assert any(i.doc_value == 13 for i in app._pending_result.report.warnings)
+    footer = dict(zip(module.PREVIEW_COLUMNS, app.totals_table.rows[0][1]))
+    assert footer["количество"] == "2 *"
+    assert footer["сумма"] == "10"
+    assert app._pending_result.document_totals[0].needs_confirmation
     for title, value in (("Из документа", "Товар"), ("количество", "2")):
         rid = next(iter(app._preview_rows))
         app.edit_source_cell(rid, title)
@@ -1228,3 +1227,61 @@ def test_scanned_total_and_rows_must_be_confirmed_before_saving(gui, monkeypatch
     _run(app)
     assert app._last_outputs
     assert load_workbook(app._last_outputs[0])["Данные"].cell(2, 5).value == 2
+
+
+def test_row_math_colors_all_numeric_cells_and_footer(gui):
+    from konvektor.extract import Item
+    from konvektor.pipeline import ConvertResult
+    from konvektor.validate import validate_items
+    app, module, _ = gui
+    good = Item(source="a", sheet="s", row=1, name="Проверено", qty=2, price=5,
+                total_sum=10, vat_rate=20, vat_sum=2, sum_with_vat=12)
+    bad = Item(source="a", sheet="s", row=2, name="Ошибка", qty=3, price=5,
+               total_sum=14, vat_rate=20, vat_sum=2.8, sum_with_vat=16.8)
+    unknown = Item(source="a", sheet="s", row=3, name="Неизвестно", qty=1, price=5,
+                   total_sum=None, vat_rate=20, vat_sum=1, sum_with_vat=6,
+                   unrecognized={"total_sum"}, needs_confirmation={"total_sum"})
+    report = validate_items([good, bad, unknown])
+    app._pending_result = ConvertResult(items=[good, bad, unknown], report=report)
+    app._show_preview([good, bad, unknown])
+    app._show_totals(app._pending_result)
+    app._refresh_barcode_highlights()
+    ids = list(app._preview_rows)
+    for title in module._NUMERIC_PREVIEW:
+        assert app._issue_highlights[(ids[0], title)].cget("background") == "#EDFFD9"
+        assert app._issue_highlights[(ids[1], title)].cget("background") == "#FFF1F2"
+        assert app._issue_highlights[(ids[2], title)].cget("background") == "#FFF1F2"
+    assert (ids[2], module.COLUMN_FROM_DOC) not in app._issue_highlights
+    assert app._issue_highlights[(ids[2], "сумма")].cget("text") == "??? *"
+    footer = dict(zip(module.PREVIEW_COLUMNS, app.totals_table.rows[0][1]))
+    assert footer["количество"] == "6"
+    assert footer["сумма"] == "??? *"
+    assert footer["сумма НДС"] == "5,80"
+    assert footer["сумма с НДС"] == "34,80"
+
+
+def test_math_green_does_not_confirm_ocr_and_detects_wrong_zero_vat(gui):
+    from konvektor.extract import Item
+    from konvektor.validate import validate_items
+    app, _, _ = gui
+    item = Item(source="f", sheet="s", row=1, name="Товар", qty=2, price=5, total_sum=10,
+                vat_rate=20, vat_sum=2, sum_with_vat=12, needs_confirmation={"qty"})
+    report = validate_items([item])
+    assert app._row_math_ok(item, report)
+    assert "qty" in item.needs_confirmation
+    item.vat_rate, item.vat_sum, item.sum_with_vat = 0, 2, 12
+    assert not app._row_math_ok(item, report)
+    item.vat_rate, item.vat_sum, item.sum_with_vat = 20, 2, 12
+    item.computed.add("сумма")
+    assert not app._row_math_ok(item, report)
+
+
+def test_totals_follow_preview_column_widths_and_display_mode(gui):
+    app, module, _ = gui
+    app.preview.column("количество", width=123)
+    app._sync_totals_columns()
+    assert app.totals_table.column("количество", "width") == 123
+    assert app.totals_table.options["displaycolumns"] == module.PREVIEW_WITHOUT_VED
+    app._vedomost = object()
+    app._update_preview_columns()
+    assert app.totals_table.options["displaycolumns"] == module.PREVIEW_COLUMNS
