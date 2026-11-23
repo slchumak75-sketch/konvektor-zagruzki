@@ -53,6 +53,9 @@ class Item:
     computed: Set[str] = field(default_factory=set)
     #: Поля, которые были в документе, но не удалось прочитать (не достраивать).
     unrecognized: Set[str] = field(default_factory=set)
+    #: Кандидаты OCR ожидают подтверждения человеком, включая уверенные значения.
+    needs_confirmation: Set[str] = field(default_factory=set)
+    barcode_from_name_allowed: bool = True
     #: номенклатура не найдена в ведомости (или её не выбирали) — «Новинка»
     novinka: bool = False
 
@@ -89,6 +92,7 @@ class DocTotal:
     label: str = ""
     values: Dict[str, float] = field(default_factory=dict)  # по распознанным колонкам
     numbers: List[float] = field(default_factory=list)     # все числа строки
+    needs_confirmation: bool = False  # результат OCR нельзя считать итогом документа до сверки
 
 
 @dataclass

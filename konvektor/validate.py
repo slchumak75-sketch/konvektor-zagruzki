@@ -346,6 +346,13 @@ def check_document_totals(
         return round(sum(values), 4)
 
     for t in totals:
+        if t.needs_confirmation:
+            report.issues.append(Issue(
+                severity="warning", source=t.source, sheet=t.sheet, row=t.row,
+                name=f"«{t.label}»", field="итог",
+                message="итог документа не проверен: распознанные цифры требуют подтверждения по оригиналу",
+            ))
+            continue
         field = total_field_from_label(t.label)
         if field == "skip":
             continue

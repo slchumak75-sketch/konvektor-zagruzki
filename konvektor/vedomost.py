@@ -1045,7 +1045,7 @@ class Matcher:
         name = getattr(item, "name", "") or ""
         article = getattr(item, "article", "") or ""
         barcode = getattr(item, "barcode", "") or ""
-        if not barcode:
+        if not barcode and getattr(item, "barcode_from_name_allowed", True):
             barcode = find_barcode_in_text(name) or ""
 
         # Сверка по поставщику: если поставщик документа есть в ведомости —

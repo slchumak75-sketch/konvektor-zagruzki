@@ -1184,3 +1184,47 @@ def test_pdf_page_grouping_requires_explicit_confirmation(gui, monkeypatch, tmp_
     monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: False)
     app.on_convert()
     assert app._document_groups == []
+
+
+def test_scanned_total_and_rows_must_be_confirmed_before_saving(gui, monkeypatch, tmp_path):
+    from konvektor.extract import DocTotal, Item, SheetExtraction
+    from konvektor.readers import Sheet, SourceFile
+    import konvektor.pipeline as pipeline
+    import konvektor.ocr as ocr
+    from openpyxl import load_workbook
+
+    app, module, dialogs = gui
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF-test")
+    def fake_scan(path, _data):
+        item = Item(source=path, sheet="PDF 1", row=1, name="Товар", qty=2, price=5,
+                    total_sum=10, vat_rate=20, vat_sum=2, sum_with_vat=12,
+                    needs_confirmation={"name", "qty"})
+        total = DocTotal(source=path, sheet="PDF 1", row=2, label="Итого (OCR)",
+                         values={"qty": 2, "sum": 10, "vat_sum": 2, "total": 12}, needs_confirmation=True)
+        return SourceFile(path, [Sheet("PDF 1")], reader="pdf-ocr"), SheetExtraction(items=[item], totals=[total])
+    monkeypatch.setattr(pipeline, "read_source", lambda _p: (_ for _ in ()).throw(ValueError("scan")))
+    monkeypatch.setattr(ocr, "read_scanned_pdf", fake_scan)
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: True)
+    app._add_files([str(source)])
+    app.on_convert()
+    _run(app)
+    app.on_save()
+    assert not app._last_outputs
+    key = next(iter(app._total_editor_vars))
+    app._total_editor_vars[key]["total"].set("13")
+    app._confirm_ocr_total(key)
+    _run(app)
+    assert not app._pending_result.document_totals[0].needs_confirmation
+    assert any(i.doc_value == 13 for i in app._pending_result.report.warnings)
+    for title, value in (("Из документа", "Товар"), ("количество", "2")):
+        rid = next(iter(app._preview_rows))
+        app.edit_source_cell(rid, title)
+        app._edit_var.set(value)
+        app._commit_source_cell(rid, title)
+        _run(app)
+    assert not app._pending_result.items[0].needs_confirmation
+    app.on_save()
+    _run(app)
+    assert app._last_outputs
+    assert load_workbook(app._last_outputs[0])["Данные"].cell(2, 5).value == 2

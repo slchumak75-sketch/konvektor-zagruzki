@@ -88,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="вернуть код 3, если найдены расхождения в суммах")
     p.add_argument("--no-validate", action="store_true", help="не проверять арифметику (только перенос данных)")
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
+    p.add_argument("--ocr-selftest", action="store_true", help="проверить наличие движка и моделей OCR")
     p.add_argument(
         "--explain",
         nargs="+",
@@ -114,6 +115,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     log = (lambda msg: None) if args.quiet else (lambda msg: print(msg, flush=True))
+
+    if args.ocr_selftest:
+        from PIL import Image
+        from .ocr import TesseractCellEngine, recognize_cell
+        try:
+            import cv2
+            import numpy
+            base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
+            tessdata = os.environ.get("KONVEKTOR_TESSDATA", os.path.join(base, "tessdata"))
+            with TesseractCellEngine(tessdata) as engine:
+                recognize_cell(Image.new("RGB", (100, 40), "white"), engine, numeric=True)
+            print(f"OCR: OK (OpenCV {cv2.__version__}, NumPy {numpy.__version__})")
+            return 0
+        except Exception as exc:
+            print(f"OCR: FAIL — {exc}", file=sys.stderr)
+            return 1
 
     if args.selftest is not None:
         ok, msg = selftest(args.selftest, log=log)

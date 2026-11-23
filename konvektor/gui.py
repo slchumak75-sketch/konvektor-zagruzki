@@ -199,6 +199,14 @@ class KonvertorApp(_Base):
         self._matcher: Optional[Matcher] = None
         self._overrides: dict = {}
         self._field_edits: dict = {}
+        self._ocr_cache: dict = {}
+        self._ocr_bound_hashes: dict = {}
+        self._ocr_confirmations: dict = {}
+        self._ocr_total_edits: dict = {}
+        self._total_widgets: list = []
+        self._total_editor_vars: dict = {}
+        self._quiet_recheck = False
+        self._restore_y = None
         self._document_groups: list = []
         self._group_question_answered = False
         # строки таблицы: id строки -> {"item": позиция, "key": ключ сверки}
@@ -440,6 +448,8 @@ class KonvertorApp(_Base):
         ttk.Label(body, textvariable=self.totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w", pady=(4, 0))
         self.doc_totals_var = tk.StringVar(value="")
         ttk.Label(body, textvariable=self.doc_totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w")
+        self.ocr_totals_panel = ttk.Frame(body, style="Card.TFrame")
+        self.ocr_totals_panel.pack(fill="x")
         status_row = ttk.Frame(body, style="Card.TFrame")
         status_row.pack(fill="x", pady=(4, 0))
         self.hint_var = tk.StringVar(value="")
@@ -1016,8 +1026,15 @@ class KonvertorApp(_Base):
             self._group_question_answered = True
         self._start_convert(list(self.files), strategy, write=False)
 
-    def _start_convert(self, paths: List[str], strategy: str = MATCH_NAME, write: bool = False) -> None:
+    def _start_convert(self, paths: List[str], strategy: str = MATCH_NAME, write: bool = False, quiet: bool = False) -> None:
         """Запустить разбор выбранных файлов в фоне."""
+        self._quiet_recheck = quiet
+        self._restore_y = None
+        if quiet:
+            try:
+                self._restore_y = self.preview.yview()[0]
+            except (TypeError, IndexError, AttributeError):
+                pass
         paths = list(paths)
         folder = self.output_dir()
         self._strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
@@ -1046,6 +1063,10 @@ class KonvertorApp(_Base):
             require_all=True,
             field_edits={k: dict(v) for k, v in self._field_edits.items()},
             document_groups=list(self._document_groups),
+            ocr_cache=self._ocr_cache,
+            ocr_expected_hashes=dict(self._ocr_bound_hashes),
+            ocr_confirmations=dict(self._ocr_confirmations),
+            ocr_total_edits={k: dict(v) for k, v in self._ocr_total_edits.items()},
             matcher=matcher,
             sklad=self._sklad,
             # поставщик для папки: выбранный в диалоге (пусто — из документа)
@@ -1098,6 +1119,28 @@ class KonvertorApp(_Base):
         if not paths or any(not os.path.exists(path) for path in paths):
             messagebox.showwarning(APP_NAME, "Один из исходных файлов больше недоступен — выберите файлы снова.")
             return
+
+        unresolved = sum(bool(i.unrecognized or i.needs_confirmation) for i in self._pending_result.items)
+        if unresolved:
+            messagebox.showwarning(APP_NAME, f"В {unresolved} строках есть неподтверждённые или нераспознанные значения. Проверьте отмеченные ячейки двойным щелчком и нажмите Enter.")
+            return
+        if any(t.needs_confirmation for t in self._pending_result.document_totals):
+            messagebox.showwarning(APP_NAME, "Сверьте итоговые цифры с оригиналом и нажмите «Подтвердить итог».")
+            return
+        if self._pending_result.ocr_source_hashes:
+            counts = []
+            for path in self._pending_result.ocr_source_hashes:
+                count = sum(i.source == path for i in self._pending_result.items)
+                counts.append(f"{os.path.basename(path)}: {count} строк")
+            if not messagebox.askyesno(
+                APP_NAME,
+                "Проверьте по оригиналу, что все строки присутствуют и нет лишних:\n\n"
+                + "\n".join(counts) + "\n\nПодтверждаете полноту строк? "
+                "Если строки отсутствуют или лишние — нажмите «Нет» и не сохраняйте.",
+                default="no",
+            ):
+                return
+            self._ocr_confirmations = dict(self._pending_result.ocr_source_hashes)
 
         # ВАЖНО: путь читаем из поля заново — пользователь мог изменить его
         # после «Конвертировать». Раньше здесь брался снимок, и файл уходил
@@ -1183,6 +1226,8 @@ class KonvertorApp(_Base):
         self._set_busy(False)
         self._last_outputs = list(result.outputs)
         self._pending_result = result
+        for path, digest in result.ocr_source_hashes.items():
+            self._ocr_bound_hashes.setdefault(path, digest)
         names = sorted({m.supplier.strip() for m in result.metas.values() if m.supplier and m.supplier.strip()}, key=str.casefold)
         self._document_suppliers = ", ".join(names)
         self.source_var.set(self.source_text())
@@ -1191,6 +1236,11 @@ class KonvertorApp(_Base):
 
         self._show_preview(result.items)
         self._show_totals(result)
+        if self._restore_y is not None:
+            try:
+                self.preview.yview_moveto(self._restore_y)
+            except (AttributeError, TypeError):
+                pass
         self._log("")
         self._log(
             f"Позиций: {result.items_count}; ошибок: {result.error_count}; "
@@ -1222,6 +1272,8 @@ class KonvertorApp(_Base):
             parts.append(f"будет сохранено: {folder} / {name} (кнопка «Сохранить»)")
         elif docs:
             parts.append(docs)
+        if result.items_count:
+            parts.insert(0, f"Арифметика: расхождений {result.error_count}, предупреждений {result.warning_count}")
         if parts:
             self.hint_var.set(" · ".join(part for part in parts if part))
 
@@ -1248,7 +1300,7 @@ class KonvertorApp(_Base):
                 text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
             if result.errors:
                 text += "\n\nОшибки: " + "; ".join(result.errors)
-            if result.error_count or result.errors:
+            if result.errors or (result.error_count and not self._quiet_recheck):
                 issues = result.report.errors if result.report else []
                 details = [f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in issues[:10]]
                 if len(issues) > 10:
@@ -1326,7 +1378,8 @@ class KonvertorApp(_Base):
                 pieces.append(f"{label}: ??? (есть пустые значения)")
             else:
                 pieces.append(f"{label}: {self._fmt(round(sum(values), 2), 'сумма')}")
-        self.totals_var.set("По всем строкам таблицы: " + " · ".join(pieces))
+        pending = any(i.unrecognized or i.needs_confirmation for i in result.items)
+        self.totals_var.set("По всем строкам таблицы" + (" (есть неподтверждённые значения)" if pending else "") + ": " + " · ".join(pieces))
         parts = []
         for total in result.document_totals:
             if not total.values and not total.numbers:
@@ -1336,7 +1389,8 @@ class KonvertorApp(_Base):
                 values = ", ".join(f"{labels.get(k, k)}: {self._fmt(v)}" for k, v in total.values.items())
             else:
                 values = ", ".join(self._fmt(v) for v in total.numbers) + " (поля не определены)"
-            parts.append(f"{os.path.basename(total.source)}, {total.sheet}, строка {total.row}: {total.label} — {values}")
+            unconfirmed = " (OCR: требуется подтверждение)" if total.needs_confirmation else ""
+            parts.append(f"{os.path.basename(total.source)}, {total.sheet}, строка {total.row}: {total.label} — {values}{unconfirmed}")
         total_rows = {(t.source, t.sheet, t.row) for t in result.document_totals}
         discrepancies = [i for i in (result.report.issues if result.report else [])
                          if (i.source, i.sheet, i.row) in total_rows and i.severity in ("error", "warning")]
@@ -1345,6 +1399,41 @@ class KonvertorApp(_Base):
             status = " | ВНИМАНИЕ: " + "; ".join(
                 f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in discrepancies)
         self.doc_totals_var.set("Итоги из документа: " + ("; ".join(parts) if parts else "не найдены") + status)
+        self._render_ocr_total_editors(result)
+
+    def _render_ocr_total_editors(self, result: ConvertResult) -> None:
+        for widget in self._total_widgets:
+            widget.destroy()
+        self._total_widgets.clear()
+        self._total_editor_vars.clear()
+        for total in result.document_totals:
+            if total.source not in result.ocr_source_hashes:
+                continue
+            key = (total.source, total.sheet, total.row)
+            row = ttk.Frame(self.ocr_totals_panel, style="Card.TFrame")
+            row.pack(fill="x")
+            self._total_widgets.append(row)
+            ttk.Label(row, text=f"Итог {os.path.basename(total.source)}, {total.sheet}:").pack(side="left")
+            variables = {}
+            for field, label in (("qty", "Количество"), ("sum", "Без НДС"), ("vat_sum", "НДС"), ("total", "С НДС")):
+                ttk.Label(row, text=label).pack(side="left", padx=(5, 1))
+                value = total.values.get(field)
+                var = tk.StringVar(value=self._fmt(value) if value is not None else "???")
+                ttk.Entry(row, textvariable=var, width=10).pack(side="left")
+                variables[field] = var
+            self._total_editor_vars[key] = variables
+            label = "Подтвердить итог" if total.needs_confirmation else "Изменить итог"
+            ttk.Button(row, text=label, command=lambda k=key: self._confirm_ocr_total(k)).pack(side="left", padx=5)
+
+    def _confirm_ocr_total(self, key) -> None:
+        if self._running or key not in self._total_editor_vars:
+            return
+        values = {field: parse_number(var.get()) for field, var in self._total_editor_vars[key].items()}
+        if any(value is None for value in values.values()):
+            messagebox.showwarning(APP_NAME, "Сверьте с оригиналом и введите все четыре числа итога.")
+            return
+        self._ocr_total_edits[key] = values
+        self._start_convert(list(self._pending_sources), self._strategy, write=False, quiet=True)
 
     def _update_preview_columns(self) -> None:
         """Показать/скрыть колонки «Из ведомости», «▾» и «% совпадения»."""
@@ -1531,9 +1620,10 @@ class KonvertorApp(_Base):
         columns = PREVIEW_COLUMNS if self._vedomost is not None else PREVIEW_WITHOUT_VED
         for row_id, stored in self._preview_rows.items():
             item = stored["item"]
-            for title in set(_NUMERIC_PREVIEW) | {COLUMN_FROM_DOC}:
+            for title in set(_NUMERIC_PREVIEW) | {COLUMN_FROM_DOC, "ед. изм.", "Штрихкод"}:
                 unknown = _EDITABLE_SOURCE[title] in item.unrecognized
-                if not unknown and (item.source, item.sheet, item.row, title) not in issue_fields:
+                needs_review = _EDITABLE_SOURCE[title] in item.needs_confirmation
+                if not unknown and not needs_review and (item.source, item.sheet, item.row, title) not in issue_fields:
                     continue
                 try:
                     box = self.preview.bbox(row_id, f"#{columns.index(title) + 1}")
@@ -1737,7 +1827,7 @@ class KonvertorApp(_Base):
         self._field_edits.setdefault(key, {})[_EDITABLE_SOURCE[title]] = value
         self._destroy_editor()
         # Повторный разбор проверяет и итог документа, и все формулы строк.
-        self._start_convert(list(self._pending_sources), self._strategy, write=False)
+        self._start_convert(list(self._pending_sources), self._strategy, write=False, quiet=True)
 
     def edit_cell(self, row_id: str) -> None:
         """Поле ввода названия поверх ячейки «Из ведомости» (свой текст)."""
@@ -2021,6 +2111,10 @@ class KonvertorApp(_Base):
         for widget in self._issue_highlights.values():
             widget.destroy()
         self._issue_highlights.clear()
+        for widget in self._total_widgets:
+            widget.destroy()
+        self._total_widgets.clear()
+        self._total_editor_vars.clear()
         self.totals_var.set("")
         self.doc_totals_var.set("")
         for child in self.preview.get_children():
@@ -2044,6 +2138,10 @@ class KonvertorApp(_Base):
                 files.append(full)
         if files:
             self._field_edits.clear()
+            self._ocr_cache.clear()
+            self._ocr_bound_hashes.clear()
+            self._ocr_confirmations.clear()
+            self._ocr_total_edits.clear()
             self._document_groups = []
             self._group_question_answered = False
             self.files = sorted(files, key=natural)
@@ -2077,6 +2175,10 @@ class KonvertorApp(_Base):
     def _clear_files(self) -> None:
         self.files.clear()
         self._field_edits.clear()
+        self._ocr_cache.clear()
+        self._ocr_bound_hashes.clear()
+        self._ocr_confirmations.clear()
+        self._ocr_total_edits.clear()
         self._document_groups = []
         self._group_question_answered = False
         self._document_suppliers = ""

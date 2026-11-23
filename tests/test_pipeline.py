@@ -696,3 +696,39 @@ def test_unrecognized_value_does_not_silently_save_or_get_computed(known_paths, 
     assert result.outputs == [str(output)]
     assert result.items[0].total_sum == 99.99
     assert not result.items[0].unrecognized
+
+
+def test_pdf_ocr_fallback_is_cached_and_requires_confirmation(tmp_path, monkeypatch):
+    import konvektor.ocr as ocr
+    import konvektor.pipeline as pipeline
+    from konvektor.extract import Item, SheetExtraction
+    from konvektor.readers import Sheet, SourceFile
+
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"%PDF-test")
+    calls = []
+    def fake_ocr(source, _tessdata):
+        calls.append(source)
+        item = Item(source=source, sheet="PDF 1", row=1, name="Товар", qty=2,
+                    needs_confirmation={"name", "qty"})
+        return SourceFile(source, [Sheet("PDF 1")], reader="pdf-ocr"), SheetExtraction(items=[item])
+    monkeypatch.setattr(pipeline, "read_source", lambda _p: (_ for _ in ()).throw(ValueError("no text")))
+    monkeypatch.setattr(ocr, "read_scanned_pdf", fake_ocr)
+    cache = {}
+    output = tmp_path / "result.xlsx"
+    preview = convert([str(path)], str(output), ConvertOptions(write=False, ocr_cache=cache))
+    assert preview.items_count == 1 and preview.items[0].needs_confirmation
+    result = convert([str(path)], str(output), ConvertOptions(ocr_cache=cache, ocr_confirmations=preview.ocr_source_hashes))
+    assert len(calls) == 1
+    assert not result.outputs and not output.exists()
+    assert any("не подтверждены" in error for error in result.errors)
+    key = (str(path), "PDF 1", 1, 0)
+    verified = convert([str(path)], str(output), ConvertOptions(ocr_cache=cache, ocr_confirmations=preview.ocr_source_hashes, field_edits={key: {"name": "Товар", "qty": 2}}))
+    assert verified.outputs == [str(output)]
+    assert len(calls) == 1
+    # Кэш — исходный снимок, исправления в результате его не меняют.
+    assert preview.items[0].needs_confirmation == {"name", "qty"}
+    path.write_bytes(b"%PDF-changed")
+    changed = convert([str(path)], str(output), ConvertOptions(ocr_cache=cache, ocr_confirmations=preview.ocr_source_hashes, field_edits={key: {"name": "Товар", "qty": 2}}))
+    assert not changed.outputs and any("исходный файл изменился" in e for e in changed.errors)
+    assert len(calls) == 2
