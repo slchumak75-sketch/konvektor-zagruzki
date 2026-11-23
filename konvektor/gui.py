@@ -1,11 +1,11 @@
 """Оконное приложение для Windows (tkinter — входит в стандартный Python).
 
 Логики здесь минимум: всё, что можно посчитать, живёт в pipeline.py. GUI
-только принимает **один** файл, запускает конвертацию в отдельном потоке и
+принимает один или несколько файлов, запускает конвертацию в отдельном потоке и
 показывает в нижней части окна саму полученную таблицу (как в Excel).
 
 Особенности, заданные заказчиком:
-  * файл обрабатывается по одному; после конвертации список очищается сам;
+  * несколько файлов объединяются в одну таблицу в порядке имён;
   * файл результата сохраняется в папку склада с именем «склад поставщик дата.xlsx»;
   * в таблицу всегда добавляются колонки «файл» и «строка»;
   * журнала нет — вместо него предпросмотр готовой таблицы.
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -181,6 +182,7 @@ class KonvertorApp(_Base):
         self._last_outputs: List[str] = []
         self.log_lines: List[str] = []
         self._pending_source: Optional[str] = None
+        self._pending_sources: List[str] = []
         self._pending_out: str = ""
         self._pending_result: Optional[ConvertResult] = None
         # сверка с ведомостью: загруженная ведомость, выбранный способ подбора
@@ -861,10 +863,12 @@ class KonvertorApp(_Base):
         return self._sklad or supplier or ""
 
     def on_add_files(self) -> None:
-        path = filedialog.askopenfilename(title="Выберите файл", filetypes=FILE_TYPES)
-        if not path:
+        if self._running:
             return
-        self._add_files([path])
+        paths = filedialog.askopenfilenames(title="Выберите файлы", filetypes=FILE_TYPES)
+        if not paths:
+            return
+        self._add_files(list(paths))
         # заказчик просил спрашивать склад и поставщика именно при загрузке файла
         self.ask_source()
 
@@ -985,10 +989,11 @@ class KonvertorApp(_Base):
         if not self.files:
             messagebox.showwarning(APP_NAME, "Сначала выберите файл.")
             return
-        self._start_convert(self.files[0], strategy, write=False)
+        self._start_convert(list(self.files), strategy, write=False)
 
-    def _start_convert(self, path: str, strategy: str = MATCH_NAME, write: bool = False) -> None:
-        """Запустить разбор файла в фоне (write=False — только показать таблицу)."""
+    def _start_convert(self, paths: List[str], strategy: str = MATCH_NAME, write: bool = False) -> None:
+        """Запустить разбор выбранных файлов в фоне."""
+        paths = list(paths)
         folder = self.output_dir()
         self._strategy = strategy if strategy in MATCH_TITLES else MATCH_NAME
         matcher = None
@@ -1013,6 +1018,7 @@ class KonvertorApp(_Base):
             output_dir=folder,
             # «Конвертировать» только показывает таблицу; пишет «Сохранить»
             write=write,
+            require_all=True,
             matcher=matcher,
             sklad=self._sklad,
             # поставщик для папки: выбранный в диалоге (пусто — из документа)
@@ -1021,7 +1027,8 @@ class KonvertorApp(_Base):
 
         self._set_busy(True)
         self.save_btn.configure(state="disabled")
-        self._pending_source = path
+        self._pending_sources = list(paths)
+        self._pending_source = paths[0] if paths else None
         self._pending_out = folder
         if not write:
             self._pending_result = None
@@ -1031,13 +1038,14 @@ class KonvertorApp(_Base):
         self._log_clear()
         self._clear_preview()
         self._log(f"{APP_NAME} {__version__}")
-        self._log(f"файл: {os.path.basename(path)}")
+        for path in paths:
+            self._log(f"файл: {os.path.basename(path)}")
         if matcher is not None:
             self._log("сверка с ведомостью: " + matcher.strategy_title)
 
         def worker() -> None:
             try:
-                result = convert([path], folder, options, log=lambda m: self._queue.put(("log", m)))
+                result = convert(paths, folder, options, log=lambda m: self._queue.put(("log", m)))
                 self._queue.put(("saved" if write else "done", result))
             except Exception as exc:  # noqa: BLE001 - показываем пользователю
                 self._queue.put(("error", (exc, traceback.format_exc())))
@@ -1053,18 +1061,19 @@ class KonvertorApp(_Base):
             messagebox.showwarning(APP_NAME, "Нечего сохранять: позиции не найдены.")
             return
 
-        path = self._pending_source or ""
-        if not path or not os.path.exists(path):
-            messagebox.showwarning(
-                APP_NAME, "Исходный файл больше недоступен — выберите его снова."
-            )
+        if self._pending_result.errors:
+            messagebox.showwarning(APP_NAME, "Не все исходные файлы удалось прочитать. Исправьте ошибки и повторите конвертацию, чтобы не сохранить неполный результат.")
+            return
+        paths = list(self._pending_sources)
+        if not paths or any(not os.path.exists(path) for path in paths):
+            messagebox.showwarning(APP_NAME, "Один из исходных файлов больше недоступен — выберите файлы снова.")
             return
 
         # ВАЖНО: путь читаем из поля заново — пользователь мог изменить его
         # после «Конвертировать». Раньше здесь брался снимок, и файл уходил
         # в старую папку. Способ сверки тоже берём тот, которым конвертировали.
         self._pending_out = self.output_dir()
-        self._start_convert(path, self._strategy, write=True)
+        self._start_convert(paths, self._strategy, write=True)
 
     def on_open_result(self) -> None:
         """Открыть сохранённый файл в Excel (или чем он открыт в системе)."""
@@ -1147,7 +1156,7 @@ class KonvertorApp(_Base):
         names = sorted({m.supplier.strip() for m in result.metas.values() if m.supplier and m.supplier.strip()}, key=str.casefold)
         self._document_suppliers = ", ".join(names)
         self.source_var.set(self.source_text())
-        self.save_btn.configure(state="normal" if result.items_count else "disabled")
+        self.save_btn.configure(state="normal" if result.items_count and not result.errors else "disabled")
         self._update_preview_columns()
 
         self._show_preview(result.items)
@@ -1204,22 +1213,23 @@ class KonvertorApp(_Base):
                         " ведомости или «не выбирать (новый товар)»: тогда в файле"
                         " будет слово «Новинка»."
                     )
-            if planned:
+            if planned and not result.errors:
                 text += f"\n\nКнопка «Сохранить» запишет файл:\n{planned}"
             if result.errors:
                 text += "\n\nОшибки: " + "; ".join(result.errors)
-            if result.error_count:
+            if result.error_count or result.errors:
                 issues = result.report.errors if result.report else []
                 details = [f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in issues[:10]]
                 if len(issues) > 10:
                     details.append(f"И ещё ошибок: {len(issues) - 10}")
                 messagebox.showwarning(APP_NAME, text + ("\n\n" + "\n".join(details) if details else ""))
         else:
+            detail = "\n\n" + "\n".join(result.errors) if result.errors else ""
             messagebox.showwarning(
                 APP_NAME,
                 "Не удалось найти ни одной позиции.\n\n"
-                "Проверьте, что в файле есть таблица с колонками "
-                "«наименование», «количество», «цена» и т.п.",
+                "Проверьте, что в файлах есть таблицы с колонками "
+                "«наименование», «количество», «цена» и т.п." + detail,
             )
 
     def _fail(self, exc: Exception, tb: str) -> None:
@@ -1870,19 +1880,34 @@ class KonvertorApp(_Base):
             self.preview.delete(child)
 
     def _add_files(self, paths: List[str]) -> None:
-        """Один файл за раз: новый выбор заменяет предыдущий."""
+        """Новый выбор заменяет предыдущий; страницы сортируются по номеру."""
+        def natural(path: str):
+            name = os.path.basename(path).casefold()
+            return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+        files = []
+        seen = set()
         for path in paths:
             full = os.path.abspath(path)
             if not is_supported(full):
                 self._log(f"пропущен (неподдерживаемый формат): {full}")
                 continue
-            self.files = [full]
+            if os.path.normcase(full) not in seen:
+                seen.add(os.path.normcase(full))
+                files.append(full)
+        if files:
+            self.files = sorted(files, key=natural)
             self._document_suppliers = ""
             self.source_var.set(self.source_text())
-            self.file_var.set(os.path.basename(full))
+            self.file_var.set(", ".join(os.path.basename(path) for path in self.files))
+            self._pending_source = None
+            self._pending_sources = []
+            self._pending_result = None
+            self.save_btn.configure(state="disabled")
+            self._clear_preview()
             self.hint_var.set("")
-            self._log(f"выбран файл: {full}")
-            break
+            for path in self.files:
+                self._log(f"выбран файл: {path}")
         self._update_status()
 
     def on_clear_table(self) -> None:
@@ -1892,6 +1917,7 @@ class KonvertorApp(_Base):
         self._clear_preview()
         self._clear_files()
         self._pending_source = None
+        self._pending_sources = []
         self._pending_result = None
         self.save_btn.configure(state="disabled")
         self.open_file_btn.configure(state="disabled")

@@ -69,6 +69,8 @@ class ConvertOptions:
     output_dir: str = ""
     #: писать ли файл сразу (False — только разобрать и показать таблицу)
     write: bool = True
+    #: не сохранять неполный результат, если один из выбранных файлов не прочитан
+    require_all: bool = False
     #: склад («Мир», «Кореличи»): подпапка результата <папка>/<склад>/<поставщик>/
     sklad: str = ""
     #: поставщик, выбранный пользователем (пусто — берём из документа)
@@ -350,7 +352,10 @@ def convert(
         per_file_items.append((path, extracted.items))
         result.notes.append(f"{os.path.basename(path)}: листы [{sheet_names}], формат {src.reader}")
         if not extracted.items:
-            result.notes.append(f"{os.path.basename(path)}: позиции не найдены")
+            note = f"{os.path.basename(path)}: позиции не найдены"
+            result.notes.append(note)
+            if options.require_all:
+                result.errors.append(note)
             log("  ! позиции не найдены")
 
     if not all_items:
@@ -420,7 +425,7 @@ def convert(
                     supplier=options.supplier,
                 )
             )
-        elif not out_path:
+        else:
             if options.supplier:
                 combined_supplier = options.supplier
             else:
@@ -460,6 +465,10 @@ def convert(
             f"Готово: позиций {len(all_items)}, ошибок {result.error_count}, "
             f"предупреждений {result.warning_count}, рассчитано {result.computed_count}"
         )
+        return result
+
+    if options.require_all and result.errors:
+        log("  файл не записан: не все исходные файлы удалось обработать")
         return result
 
     # ---- запись ----------------------------------------------------------

@@ -1053,3 +1053,56 @@ def test_barcode_highlight_only_when_document_code_is_in_vedomost(gui):
     assert label.cget("background") == "#EDFFD9"
     app._clear_preview()
     assert not app._barcode_highlights
+
+
+def test_select_multiple_files_sorted_convert_and_save(gui, known_paths, tmp_path):
+    from shutil import copyfile
+    from openpyxl import load_workbook
+    app, _, dialogs = gui
+    app.out_var.set(str(tmp_path / "Итоги"))
+    source = known_paths[0]
+    files = [tmp_path / "Страница 10.xls", tmp_path / "Страница 2.xls", tmp_path / "Страница 1.xls"]
+    for path in files:
+        copyfile(source, path)
+    dialogs.open_result = tuple(map(str, files))
+    app.on_add_files()
+    assert any(call[0] == "askopenfilenames" for call in dialogs.calls)
+    assert [os.path.basename(p) for p in app.files] == ["Страница 1.xls", "Страница 2.xls", "Страница 10.xls"]
+    app.on_convert()
+    _run(app)
+    result = app._pending_result
+    assert len(result.stats) == 3
+    assert len(result.items) == sum(s.items for s in result.stats)
+    assert [os.path.basename(s.path) for s in result.stats] == ["Страница 1.xls", "Страница 2.xls", "Страница 10.xls"]
+    app.on_save()
+    _run(app)
+    assert len(app._last_outputs) == 1
+    sheet = load_workbook(app._last_outputs[0])["Данные"]
+    assert sheet.max_row == result.items_count + 2
+
+
+def test_incomplete_multi_file_conversion_cannot_save(gui, known_paths, tmp_path):
+    app, _, dialogs = gui
+    invalid = tmp_path / "сломанный.pdf"
+    invalid.write_bytes(b"%PDF-1.4\nnot a valid document")
+    app._add_files([str(known_paths[0]), str(invalid)])
+    app.on_convert()
+    _run(app)
+    assert app._pending_result.items_count > 0
+    assert app._pending_result.errors
+    assert app.save_btn.cget("state") == "disabled"
+    assert any(call[0] == "showwarning" for call in dialogs.calls)
+    app.on_save()
+    assert not app._last_outputs
+    assert not os.listdir(app.test_documents)
+
+
+def test_file_selection_invalidates_previous_preview(gui, known_paths):
+    app, _, _ = gui
+    app.on_convert()
+    _run(app)
+    assert app.save_btn.cget("state") == "normal"
+    app._add_files([str(known_paths[1]), str(known_paths[2])])
+    assert app._pending_result is None
+    assert app.save_btn.cget("state") == "disabled"
+    assert not app._preview_rows

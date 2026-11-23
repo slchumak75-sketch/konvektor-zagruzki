@@ -612,3 +612,22 @@ def test_information_sheet_merge_refuses_ambiguous_or_conflicting_rows():
     info = row("Товар", "4810992023859")
     assert _supplement_info_barcodes([main], [info])
     assert main.barcode == "4810992023859"
+
+
+def test_require_all_does_not_write_partial_results(known_paths, tmp_path):
+    missing = tmp_path / "несуществующий.xls"
+    out = tmp_path / "результат.xlsx"
+    result = convert([str(known_paths[0]), str(missing)], str(out), ConvertOptions(require_all=True))
+    assert result.items_count > 0 and result.errors
+    assert not result.outputs and not out.exists()
+
+
+def test_require_all_rejects_file_without_items(known_paths, tmp_path):
+    from openpyxl import Workbook
+    blank = tmp_path / "пустой.xlsx"
+    Workbook().save(blank)
+    out = tmp_path / "итог.xlsx"
+    result = convert([str(known_paths[0]), str(blank)], str(out), ConvertOptions(require_all=True))
+    assert result.items_count > 0
+    assert any("пустой.xlsx" in error for error in result.errors)
+    assert not result.outputs and not out.exists()
