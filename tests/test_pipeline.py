@@ -631,3 +631,68 @@ def test_require_all_rejects_file_without_items(known_paths, tmp_path):
     assert result.items_count > 0
     assert any("пустой.xlsx" in error for error in result.errors)
     assert not result.outputs and not out.exists()
+
+
+def test_field_edits_are_validated_and_written(known_paths, tmp_path):
+    path = str(known_paths[0])
+    original = convert([path], str(tmp_path / "unused.xlsx"), ConvertOptions(write=False))
+    item = original.items[0]
+    key = (item.source, item.sheet, item.row, item.block)
+    edits = {key: {"name": "Проверенный товар", "qty": 9.0, "price": 2.0, "total_sum": 12.0}}
+    out = tmp_path / "edited.xlsx"
+    result = convert([path], str(out), ConvertOptions(field_edits=edits, require_all=True))
+    assert result.outputs == [str(out)]
+    corrected = result.items[0]
+    assert corrected.name == "Проверенный товар"
+    assert corrected.qty == 9.0
+    assert any(issue.row == corrected.row and issue.field == "сумма" for issue in result.report.errors)
+    ws = load_workbook(out)["Данные"]
+    assert ws.cell(2, 3).value == "Проверенный товар"
+    assert ws.cell(2, 5).value == 9
+    assert ws.cell(2, 7).value == 12
+
+
+def test_stale_or_invalid_field_edits_never_write(known_paths, tmp_path):
+    path = str(known_paths[0])
+    initial = convert([path], str(tmp_path / "unused.xlsx"), ConvertOptions(write=False))
+    item = initial.items[0]
+    key = (item.source, item.sheet, item.row, item.block)
+    for edits in ({(item.source, item.sheet, -1, item.block): {"qty": 1}},
+                  {key: {"qty": float("nan")}}, {key: {"unknown": 1}}):
+        out = tmp_path / "must-not-exist.xlsx"
+        result = convert([path], str(out), ConvertOptions(field_edits=edits))
+        assert result.errors
+        assert not result.outputs
+        assert not out.exists()
+
+
+def test_invalid_page_group_does_not_save(known_paths, tmp_path):
+    path = str(known_paths[0])
+    output = tmp_path / "not-saved.xlsx"
+    result = convert([path], str(output), ConvertOptions(document_groups=[(path, "missing.pdf")]))
+    assert any("группа страниц" in e for e in result.errors)
+    assert not result.outputs and not output.exists()
+
+
+def test_unrecognized_value_does_not_silently_save_or_get_computed(known_paths, tmp_path, monkeypatch):
+    import konvektor.pipeline as pipeline
+    real_extract = pipeline.extract_file
+    def extract_with_unreadable(source):
+        result = real_extract(source)
+        item = result.items[0]
+        item.total_sum = None
+        item.unrecognized.add("total_sum")
+        return result
+    monkeypatch.setattr(pipeline, "extract_file", extract_with_unreadable)
+    path = str(known_paths[0])
+    output = tmp_path / "ocr.xlsx"
+    result = convert([path], str(output))
+    assert not result.outputs and not output.exists()
+    assert result.items[0].total_sum is None
+    assert any("не распознаны" in e.lower() for e in result.errors)
+    item = result.items[0]
+    key = (item.source, item.sheet, item.row, item.block)
+    result = convert([path], str(output), ConvertOptions(field_edits={key: {"total_sum": 99.99}}))
+    assert result.outputs == [str(output)]
+    assert result.items[0].total_sum == 99.99
+    assert not result.items[0].unrecognized

@@ -52,6 +52,7 @@ from .pick import (
     install_styles,
 )
 from .writer import plain_number
+from .textutil import parse_number
 from . import settings as app_settings
 
 try:  # pragma: no cover - зависит от сборки Python
@@ -134,6 +135,11 @@ _NUMERIC_PREVIEW = {"количество", "цена", "сумма", "став�
 _MONEY_PREVIEW = {"цена", "сумма", "сумма НДС", "сумма с НДС"}
 #: Количество и ставка НДС — целые, если дробной части нет (5, а не 5,00; 20, а не 20,00).
 _WHOLE_PREVIEW = {"количество", "ставка НДС"}
+_EDITABLE_SOURCE = {
+    "Штрихкод": "barcode", "Артикул": "article", COLUMN_FROM_DOC: "name",
+    "ед. изм.": "unit", "количество": "qty", "цена": "price", "сумма": "total_sum",
+    "ставка НДС": "vat_rate", "сумма НДС": "vat_sum", "сумма с НДС": "sum_with_vat",
+}
 
 #: Сколько строк показывать в предпросмотре (остальные — в файле).
 PREVIEW_LIMIT = 500
@@ -192,9 +198,13 @@ class KonvertorApp(_Base):
         self._strategy = MATCH_NAME
         self._matcher: Optional[Matcher] = None
         self._overrides: dict = {}
+        self._field_edits: dict = {}
+        self._document_groups: list = []
+        self._group_question_answered = False
         # строки таблицы: id строки -> {"item": позиция, "key": ключ сверки}
         self._preview_rows: dict = {}
         self._barcode_highlights: dict = {}
+        self._issue_highlights: dict = {}
         self._barcode_refresh_pending = False
         # склад и поставщик, выбранные в диалоге при загрузке файла
         self._sklad = ""
@@ -358,6 +368,7 @@ class KonvertorApp(_Base):
             style="Hint.TLabel",
         )
 
+        self.edit_hint.pack(anchor="w", pady=(0, 3))
         table_wrap = ttk.Frame(body, style="Card.TFrame")
         table_wrap.pack(fill="both", expand=True)
 
@@ -425,6 +436,10 @@ class KonvertorApp(_Base):
         self.preview.bind("<Button-4>", self._on_preview_wheel)
         self.preview.bind("<Button-5>", self._on_preview_wheel)
 
+        self.totals_var = tk.StringVar(value="")
+        ttk.Label(body, textvariable=self.totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w", pady=(4, 0))
+        self.doc_totals_var = tk.StringVar(value="")
+        ttk.Label(body, textvariable=self.doc_totals_var, style="Hint.TLabel", wraplength=1500).pack(anchor="w")
         status_row = ttk.Frame(body, style="Card.TFrame")
         status_row.pack(fill="x", pady=(4, 0))
         self.hint_var = tk.StringVar(value="")
@@ -989,6 +1004,16 @@ class KonvertorApp(_Base):
         if not self.files:
             messagebox.showwarning(APP_NAME, "Сначала выберите файл.")
             return
+        if not self._group_question_answered and len(self.files) > 1 and all(p.lower().endswith(".pdf") for p in self.files):
+            same_document = messagebox.askyesno(
+                APP_NAME,
+                "Все выбранные PDF — страницы одной накладной в указанном порядке?\n\n"
+                "Да — итог последней страницы будет сверяться со всеми выбранными страницами.\n"
+                "Нет — файлы будут проверяться отдельно.",
+                default="no",
+            )
+            self._document_groups = [tuple(self.files)] if same_document else []
+            self._group_question_answered = True
         self._start_convert(list(self.files), strategy, write=False)
 
     def _start_convert(self, paths: List[str], strategy: str = MATCH_NAME, write: bool = False) -> None:
@@ -1019,6 +1044,8 @@ class KonvertorApp(_Base):
             # «Конвертировать» только показывает таблицу; пишет «Сохранить»
             write=write,
             require_all=True,
+            field_edits={k: dict(v) for k, v in self._field_edits.items()},
+            document_groups=list(self._document_groups),
             matcher=matcher,
             sklad=self._sklad,
             # поставщик для папки: выбранный в диалоге (пусто — из документа)
@@ -1056,6 +1083,9 @@ class KonvertorApp(_Base):
     def on_save(self) -> None:
         """Записать разобранную таблицу в xlsx (кнопка «Сохранить»)."""
         if self._running or self._pending_result is None:
+            return
+        if self._editor is not None:
+            messagebox.showwarning(APP_NAME, "Завершите правку клавишей Enter или отмените её клавишей Esc.")
             return
         if not self._pending_result.items_count:
             messagebox.showwarning(APP_NAME, "Нечего сохранять: позиции не найдены.")
@@ -1160,6 +1190,7 @@ class KonvertorApp(_Base):
         self._update_preview_columns()
 
         self._show_preview(result.items)
+        self._show_totals(result)
         self._log("")
         self._log(
             f"Позиций: {result.items_count}; ошибок: {result.error_count}; "
@@ -1284,6 +1315,37 @@ class KonvertorApp(_Base):
         if not items:
             self.hint_var.set("Позиции не найдены — смотрите сообщение об ошибке.")
 
+    def _show_totals(self, result: ConvertResult) -> None:
+        """Итоги строк и исходные итоги не смешиваем: разные файлы могут быть разными документами."""
+        fields = (("количество", "qty"), ("без НДС", "total_sum"),
+                  ("НДС", "vat_sum"), ("с НДС", "sum_with_vat"))
+        pieces = []
+        for label, attr in fields:
+            values = [getattr(item, attr) for item in result.items]
+            if not values or any(value is None for value in values):
+                pieces.append(f"{label}: ??? (есть пустые значения)")
+            else:
+                pieces.append(f"{label}: {self._fmt(round(sum(values), 2), 'сумма')}")
+        self.totals_var.set("По всем строкам таблицы: " + " · ".join(pieces))
+        parts = []
+        for total in result.document_totals:
+            if not total.values and not total.numbers:
+                continue
+            if total.values:
+                labels = {"qty": "количество", "sum": "без НДС", "vat_sum": "НДС", "total": "с НДС"}
+                values = ", ".join(f"{labels.get(k, k)}: {self._fmt(v)}" for k, v in total.values.items())
+            else:
+                values = ", ".join(self._fmt(v) for v in total.numbers) + " (поля не определены)"
+            parts.append(f"{os.path.basename(total.source)}, {total.sheet}, строка {total.row}: {total.label} — {values}")
+        total_rows = {(t.source, t.sheet, t.row) for t in result.document_totals}
+        discrepancies = [i for i in (result.report.issues if result.report else [])
+                         if (i.source, i.sheet, i.row) in total_rows and i.severity in ("error", "warning")]
+        status = ""
+        if discrepancies:
+            status = " | ВНИМАНИЕ: " + "; ".join(
+                f"{os.path.basename(i.source)}, строка {i.row}: {i.message}" for i in discrepancies)
+        self.doc_totals_var.set("Итоги из документа: " + ("; ".join(parts) if parts else "не найдены") + status)
+
     def _update_preview_columns(self) -> None:
         """Показать/скрыть колонки «Из ведомости», «▾» и «% совпадения»."""
         with_vedomost = self._vedomost is not None
@@ -1295,9 +1357,8 @@ class KonvertorApp(_Base):
         # подсказка про правку нужна только когда есть что править
         try:
             self.edit_hint.configure(
-                text="«" + COLUMN_PICK + "» справа от названия — выбрать позицию ведомости"
-                if with_vedomost
-                else ""
+                text="Двойной щелчок по значению документа — исправить, Enter — проверить; Esc — отменить."
+                + (" «▼» — выбрать позицию ведомости." if with_vedomost else "")
             )
         except Exception:  # noqa: BLE001 - не критично
             pass
@@ -1346,7 +1407,8 @@ class KonvertorApp(_Base):
             item.vat_sum,
             item.sum_with_vat,
         ]
-        return [self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
+        return ["???" if _EDITABLE_SOURCE.get(title) in item.unrecognized
+                else self._fmt(value, title) for value, title in zip(values, PREVIEW_COLUMNS)]
 
     def _is_mismatch(self, stored: dict) -> bool:
         """Розовый: у подобранной позиции сходство названий ниже порога."""
@@ -1435,6 +1497,10 @@ class KonvertorApp(_Base):
         for widget in self._barcode_highlights.values():
             widget.destroy()
         self._barcode_highlights.clear()
+        for widget in self._issue_highlights.values():
+            widget.destroy()
+        self._issue_highlights.clear()
+        self._draw_issue_highlights()
         for row_id, stored in self._preview_rows.items():
             if not self._barcode_in_vedomost(stored):
                 continue
@@ -1448,23 +1514,52 @@ class KonvertorApp(_Base):
                                  anchor="w", padx=4, bd=0)
                 label.place(x=x + 1, y=y + 1, width=max(1, width - 2), height=max(1, height - 2))
                 label.bind("<Button-1>", lambda _event, rid=row_id: self._copy_barcode(rid))
+                label.bind("<Double-1>", lambda _event, rid=row_id: self.edit_source_cell(rid, "Штрихкод"))
                 for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                     label.bind(event, self._on_preview_wheel)
                 self._barcode_highlights[row_id] = label
             except Exception:  # noqa: BLE001 - подсветка не должна мешать работе
                 continue
 
-    def _on_preview_double_click(self, event) -> None:
-        """Двойной щелчок по «Из ведомости»/«▾» — тот же список."""
-        if self._vedomost is None or self._matcher is None:
+    def _draw_issue_highlights(self) -> None:
+        """Treeview не красит ячейки: поверх видимых ошибок ставим метки."""
+        result = self._pending_result
+        if result is None or result.report is None:
             return
+        issue_fields = {(i.source, i.sheet, i.row, i.field) for i in result.report.issues
+                        if i.severity in ("error", "warning") and i.field in _NUMERIC_PREVIEW}
+        columns = PREVIEW_COLUMNS if self._vedomost is not None else PREVIEW_WITHOUT_VED
+        for row_id, stored in self._preview_rows.items():
+            item = stored["item"]
+            for title in set(_NUMERIC_PREVIEW) | {COLUMN_FROM_DOC}:
+                unknown = _EDITABLE_SOURCE[title] in item.unrecognized
+                if not unknown and (item.source, item.sheet, item.row, title) not in issue_fields:
+                    continue
+                try:
+                    box = self.preview.bbox(row_id, f"#{columns.index(title) + 1}")
+                    if not box:
+                        continue
+                    x, y, width, height = box
+                    value = "???" if unknown else self._fmt(getattr(item, _EDITABLE_SOURCE[title]), title)
+                    label = tk.Label(self.preview, text=value, background="#FFD5A6", foreground=TEXT,
+                                     font=("Segoe UI", 11), anchor="e", padx=4, bd=0)
+                    label.place(x=x+1, y=y+1, width=max(1, width-2), height=max(1, height-2))
+                    label.bind("<Double-1>", lambda _event, rid=row_id, t=title: self.edit_source_cell(rid, t))
+                    for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                        label.bind(event, self._on_preview_wheel)
+                    self._issue_highlights[(row_id, title)] = label
+                except Exception:  # noqa: BLE001 - ошибка оформления не должна ломать таблицу
+                    continue
+
+    def _on_preview_double_click(self, event) -> None:
         target = self._cell_at(event)
         if target is None:
             return
         row_id, title = target
-        if title not in (COLUMN_PICK, COLUMN_FROM_VED):
-            return
-        self.open_chooser(row_id)
+        if title in _EDITABLE_SOURCE:
+            self.edit_source_cell(row_id, title)
+        elif title in (COLUMN_PICK, COLUMN_FROM_VED) and self._vedomost is not None and self._matcher is not None:
+            self.open_chooser(row_id)
 
     def _cell_at(self, event):
         """(id строки, название колонки) под курсором или None."""
@@ -1479,9 +1574,10 @@ class KonvertorApp(_Base):
             index = int(str(column).lstrip("#")) - 1
         except ValueError:
             return None
-        if index < 0 or index >= len(PREVIEW_COLUMNS):
+        columns = PREVIEW_COLUMNS if self._vedomost is not None else PREVIEW_WITHOUT_VED
+        if index < 0 or index >= len(columns):
             return None
-        return row_id, PREVIEW_COLUMNS[index]
+        return row_id, columns[index]
 
     def open_chooser(self, row_id: str) -> bool:
         """Показать под ячейкой список похожих позиций ведомости с процентами.
@@ -1596,6 +1692,52 @@ class KonvertorApp(_Base):
     def _cancel_edit(self) -> None:
         """Убрать поле ввода без сохранения (прокрутка, Esc, новый выбор)."""
         self._destroy_editor()
+
+    def edit_source_cell(self, row_id: str, title: str) -> None:
+        """Правка документа: Enter сохраняет и запускает повторную проверку."""
+        stored = self._preview_rows.get(row_id)
+        if not stored or title not in _EDITABLE_SOURCE or self._running:
+            return
+        columns = PREVIEW_COLUMNS if self._vedomost is not None else PREVIEW_WITHOUT_VED
+        box = self.preview.bbox(row_id, f"#{columns.index(title) + 1}")
+        if not box:
+            return
+        self._cancel_edit()
+        item = stored["item"]
+        field = _EDITABLE_SOURCE[title]
+        entry = self._entry_for(stored["key"])
+        value = getattr(item, field)
+        if entry is not None and field in ("name", "barcode", "article"):
+            value = getattr(entry, {"name": "doc_name", "barcode": "doc_barcode", "article": "doc_article"}[field])
+        self._edit_var = tk.StringVar(value="" if value is None or field in item.unrecognized else str(value))
+        self._editor = ttk.Entry(self.preview, textvariable=self._edit_var)
+        x, y, width, height = box
+        self._editor.place(x=x, y=y, width=width, height=height)
+        self._editor.focus_set()
+        self._editor.bind("<Return>", lambda _e: self._commit_source_cell(row_id, title))
+        self._editor.bind("<Escape>", lambda _e: self._cancel_edit())
+        self._editing = row_id
+        self._watch_popup(row_id, box)
+
+    def _commit_source_cell(self, row_id: str, title: str) -> None:
+        stored = self._preview_rows.get(row_id)
+        if stored is None or self._editing != row_id or title not in _EDITABLE_SOURCE:
+            return
+        value = str(self._edit_var.get() or "").strip()
+        if title in _NUMERIC_PREVIEW:
+            value = parse_number(value)
+            if value is None:
+                messagebox.showwarning(APP_NAME, "Введите число, например 12,50.")
+                return
+        elif title == COLUMN_FROM_DOC and not value:
+            messagebox.showwarning(APP_NAME, "Введите наименование товара.")
+            return
+        item = stored["item"]
+        key = (item.source, item.sheet, item.row, item.block)
+        self._field_edits.setdefault(key, {})[_EDITABLE_SOURCE[title]] = value
+        self._destroy_editor()
+        # Повторный разбор проверяет и итог документа, и все формулы строк.
+        self._start_convert(list(self._pending_sources), self._strategy, write=False)
 
     def edit_cell(self, row_id: str) -> None:
         """Поле ввода названия поверх ячейки «Из ведомости» (свой текст)."""
@@ -1876,6 +2018,11 @@ class KonvertorApp(_Base):
         for widget in self._barcode_highlights.values():
             widget.destroy()
         self._barcode_highlights.clear()
+        for widget in self._issue_highlights.values():
+            widget.destroy()
+        self._issue_highlights.clear()
+        self.totals_var.set("")
+        self.doc_totals_var.set("")
         for child in self.preview.get_children():
             self.preview.delete(child)
 
@@ -1896,6 +2043,9 @@ class KonvertorApp(_Base):
                 seen.add(os.path.normcase(full))
                 files.append(full)
         if files:
+            self._field_edits.clear()
+            self._document_groups = []
+            self._group_question_answered = False
             self.files = sorted(files, key=natural)
             self._document_suppliers = ""
             self.source_var.set(self.source_text())
@@ -1926,6 +2076,9 @@ class KonvertorApp(_Base):
 
     def _clear_files(self) -> None:
         self.files.clear()
+        self._field_edits.clear()
+        self._document_groups = []
+        self._group_question_answered = False
         self._document_suppliers = ""
         self.source_var.set(self.source_text())
         self.file_var.set("файл не выбран")

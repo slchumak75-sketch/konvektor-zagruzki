@@ -51,6 +51,8 @@ class Item:
     vat_sum: Optional[float] = None
     sum_with_vat: Optional[float] = None
     computed: Set[str] = field(default_factory=set)
+    #: Поля, которые были в документе, но не удалось прочитать (не достраивать).
+    unrecognized: Set[str] = field(default_factory=set)
     #: номенклатура не найдена в ведомости (или её не выбирали) — «Новинка»
     novinka: bool = False
 

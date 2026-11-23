@@ -1106,3 +1106,81 @@ def test_file_selection_invalidates_previous_preview(gui, known_paths):
     assert app._pending_result is None
     assert app.save_btn.cget("state") == "disabled"
     assert not app._preview_rows
+
+
+def test_source_cell_edits_recheck_and_survive_save(gui):
+    from openpyxl import load_workbook
+
+    app, module, _ = gui
+    app.on_convert()
+    _run(app)
+    row_id = next(iter(app._preview_rows))
+    first = app._preview_rows[row_id]["item"]
+    row = first.row
+    app.edit_source_cell(row_id, "количество")
+    assert app._editor is not None
+    app._edit_var.set("999,5")
+    app._commit_source_cell(row_id, "количество")
+    _run(app)
+    assert app._pending_result.items[0].qty == 999.5
+    assert any(i.row == row and i.field == "сумма" for i in app._pending_result.report.errors)
+    app.on_save()
+    _run(app)
+    ws = load_workbook(app._last_outputs[0])["Данные"]
+    assert ws.cell(2, 5).value == 999.5
+
+
+def test_source_edits_reset_for_new_file_selection(gui, known_paths):
+    app, _, _ = gui
+    app.on_convert()
+    _run(app)
+    row_id = next(iter(app._preview_rows))
+    app.edit_source_cell(row_id, "Из документа")
+    app._edit_var.set("Исправленное название")
+    app._commit_source_cell(row_id, "Из документа")
+    _run(app)
+    assert app._pending_result.items[0].name == "Исправленное название"
+    app._add_files([str(known_paths[1])])
+    assert app._field_edits == {}
+
+
+def test_arithmetic_highlight_is_removed_after_correction(gui):
+    app, _, _ = gui
+    app.on_convert()
+    _run(app)
+    rid = next(iter(app._preview_rows))
+    original = app._preview_rows[rid]["item"].qty
+    app.edit_source_cell(rid, "количество")
+    app._edit_var.set("9999")
+    app._commit_source_cell(rid, "количество")
+    _run(app)
+    rid = next(iter(app._preview_rows))
+    app._refresh_barcode_highlights()
+    assert (rid, "сумма") in app._issue_highlights
+    assert app.totals_var.get().startswith("По всем строкам таблицы:")
+    assert app.doc_totals_var.get().startswith("Итоги из документа:")
+    app.edit_source_cell(rid, "количество")
+    app._edit_var.set(str(original))
+    app._commit_source_cell(rid, "количество")
+    _run(app)
+    rid = next(iter(app._preview_rows))
+    app._refresh_barcode_highlights()
+    assert (rid, "сумма") not in app._issue_highlights
+
+
+def test_pdf_page_grouping_requires_explicit_confirmation(gui, monkeypatch, tmp_path):
+    app, module, _ = gui
+    files = [str(tmp_path / "1.pdf"), str(tmp_path / "2.pdf")]
+    app._add_files(files)
+    calls = []
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: calls.append((a, k)) or True)
+    monkeypatch.setattr(app, "_start_convert", lambda *a, **k: None)
+    app.on_convert()
+    assert app._document_groups == [tuple(files)]
+    assert calls[0][1]["default"] == "no"
+    app.on_convert()
+    assert len(calls) == 1
+    app._add_files(files)
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: False)
+    app.on_convert()
+    assert app._document_groups == []

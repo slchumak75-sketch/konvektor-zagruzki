@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import math
 import tempfile
 import traceback
 from collections import OrderedDict
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .analysis import AnalysisReport, build_report, format_report
-from .extract import Item, extract_file
+from .extract import DocTotal, Item, extract_file
 from .meta import DocMeta, extract_meta, fmt_date
 from .readers import read_source
 from .validate import ValidationReport, check_document_totals, validate_items
@@ -71,6 +72,10 @@ class ConvertOptions:
     write: bool = True
     #: не сохранять неполный результат, если один из выбранных файлов не прочитан
     require_all: bool = False
+    #: Исправления исходных ячеек: (файл, лист, строка, блок) -> поля Item.
+    field_edits: Dict[Tuple[str, str, int, int], Dict[str, object]] = field(default_factory=dict)
+    #: Явно подтверждённые страницы одного документа, в порядке страниц.
+    document_groups: List[Tuple[str, ...]] = field(default_factory=list)
     #: склад («Мир», «Кореличи»): подпапка результата <папка>/<склад>/<поставщик>/
     sklad: str = ""
     #: поставщик, выбранный пользователем (пусто — берём из документа)
@@ -85,6 +90,7 @@ class ConvertResult:
     outputs: List[str] = field(default_factory=list)
     items: List[Item] = field(default_factory=list)
     report: Optional[ValidationReport] = None
+    document_totals: List[DocTotal] = field(default_factory=list)
     stats: List[FileStat] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -271,12 +277,27 @@ def convert(
         result.notes.append("Не найдено ни одного подходящего файла")
         return result
 
+    prior_sources: Dict[str, Sequence[str]] = {}
+    group_errors: List[str] = []
+    grouped = set()
+    for group in options.document_groups:
+        if len(group) < 2 or len(set(group)) != len(group) or grouped.intersection(group) or any(p not in files for p in group):
+            group_errors.append("Некорректная группа страниц накладной: " + ", ".join(group))
+            continue
+        grouped.update(group)
+        prior_sources[group[-1]] = group[:-1]
+    result.errors.extend(group_errors)
+
     all_items: List[Item] = []
     totals = []
     blocks: Dict[Tuple[str, str, int], List[Item]] = {}
     per_file_items: List[Tuple[str, List[Item]]] = []
     metas: Dict[str, DocMeta] = {}
     analyses: Dict[str, AnalysisReport] = {}
+    edit_counts: Dict[Tuple[str, str, int, int], int] = {}
+    edit_errors: List[str] = []
+    text_fields = {"name", "barcode", "article", "unit"}
+    number_fields = {"qty", "price", "total_sum", "vat_rate", "vat_sum", "sum_with_vat"}
 
     for path in files:
         log(f"Читаю: {os.path.basename(path)}")
@@ -320,12 +341,29 @@ def convert(
         for w in meta.warnings:
             log("  ! " + w)
 
+        # Редактируем исходные значения до подбора, валидации и записи.
+        for item in extracted.items:
+            key = (item.source, item.sheet, item.row, item.block)
+            if key not in options.field_edits:
+                continue
+            edit_counts[key] = edit_counts.get(key, 0) + 1
+            changes = options.field_edits[key]
+            for name, value in changes.items():
+                valid = (name in text_fields and isinstance(value, str) and (name != "name" or bool(value.strip()))) or (
+                    name in number_fields and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value))
+                if not valid:
+                    edit_errors.append(f"Недопустимое исправление {name}: {key}")
+                    continue
+                setattr(item, name, value)
+                item.unrecognized.discard(name)
+
         matcher = options.matcher
         if matcher is not None:
             # сверка по поставщику документа: begin_file задаёт область поиска
             matcher.begin_file(path, meta.supplier)
             for item in extracted.items:
-                matcher.apply(item)
+                if "name" not in item.unrecognized:
+                    matcher.apply(item)
             log(f"  сверка с ведомостью ({getattr(matcher, 'strategy_title', '')}): " + (matcher.summary_text() or "—"))
             for line in matcher.report_lines():
                 log("  " + line)
@@ -358,6 +396,11 @@ def convert(
                 result.errors.append(note)
             log("  ! позиции не найдены")
 
+    for key in options.field_edits:
+        if edit_counts.get(key, 0) != 1:
+            edit_errors.append(f"Исправленная строка не найдена или неоднозначна: {key}")
+    result.errors.extend(edit_errors)
+
     if not all_items:
         result.notes.append("Позиции товаров не найдены — проверьте структуру файлов")
         return result
@@ -372,9 +415,10 @@ def convert(
             result.notes.append("сверка с ведомостью: " + summary)
 
     report = validate_items(all_items) if options.validate else ValidationReport(items=all_items)
-    check_document_totals(report, totals, blocks)
+    check_document_totals(report, totals, blocks, prior_sources=prior_sources)
     result.report = report
     result.items = all_items
+    result.document_totals = totals
 
     # ---- статистика по файлам -------------------------------------------
     stats: List[FileStat] = []
@@ -467,7 +511,12 @@ def convert(
         )
         return result
 
-    if options.require_all and result.errors:
+    unresolved = [item for item in all_items if item.unrecognized]
+    if unresolved:
+        result.errors.append(f"Не распознаны значения в {len(unresolved)} строках: исправьте ячейки с ??? перед сохранением")
+        log("  файл не записан: есть нераспознанные значения")
+        return result
+    if edit_errors or group_errors or (options.require_all and result.errors):
         log("  файл не записан: не все исходные файлы удалось обработать")
         return result
 
