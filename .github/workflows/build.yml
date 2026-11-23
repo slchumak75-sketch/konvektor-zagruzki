@@ -81,7 +81,7 @@ jobs:
       - name: Собрать оконную версию (Konvertor.exe)
         shell: pwsh
         run: |
-          $site = python -c "import site; print(site.getsitepackages()[0])"
+          $site = python -c "import pathlib, tesserocr; print(pathlib.Path(tesserocr.__file__).resolve().parent.parent)"
           pyinstaller --noconfirm --onefile --noconsole --noupx `
             --name Konvertor --icon assets/konvektor.ico `
             --add-data "assets/konvektor_icon.png;assets" `
@@ -89,21 +89,31 @@ jobs:
             --add-data ".ocr-tessdata/rus.traineddata;tessdata" `
             --add-data "licenses;licenses" `
             --add-binary "$site/tesserocr.libs/*.dll;tesserocr.libs" `
-            app_gui.py
-          if ($LASTEXITCODE -ne 0) { throw "Сборка Konvertor.exe не удалась" }
+            app_gui.py 2>&1 | Tee-Object -FilePath ocr-build.log
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) {
+            $message = ((Get-Content ocr-build.log -Tail 30) -join "%0A")
+            Write-Output "::error::Konvertor.exe ($buildExit): $message"
+            throw "Сборка Konvertor.exe не удалась"
+          }
 
       - name: Собрать консольную версию (Konvertor-cli.exe)
         shell: pwsh
         run: |
-          $site = python -c "import site; print(site.getsitepackages()[0])"
+          $site = python -c "import pathlib, tesserocr; print(pathlib.Path(tesserocr.__file__).resolve().parent.parent)"
           pyinstaller --noconfirm --onefile --console --noupx `
             --name Konvertor-cli --icon assets/konvektor.ico `
             --add-data ".ocr-tessdata/eng.traineddata;tessdata" `
             --add-data ".ocr-tessdata/rus.traineddata;tessdata" `
             --add-data "licenses;licenses" `
             --add-binary "$site/tesserocr.libs/*.dll;tesserocr.libs" `
-            app_cli.py
-          if ($LASTEXITCODE -ne 0) { throw "Сборка Konvertor-cli.exe не удалась" }
+            app_cli.py 2>&1 | Tee-Object -FilePath ocr-build-cli.log
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) {
+            $message = ((Get-Content ocr-build-cli.log -Tail 30) -join "%0A")
+            Write-Output "::error::Konvertor-cli.exe ($buildExit): $message"
+            throw "Сборка Konvertor-cli.exe не удалась"
+          }
 
       - name: Проверить собранные .exe
         shell: pwsh
