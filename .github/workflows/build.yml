@@ -61,6 +61,12 @@ jobs:
       - name: Установить зависимости
         run: pip install -r requirements-dev.txt
 
+      - name: Проверить реальные виджеты Windows
+        shell: pwsh
+        run: |
+          python -m tests.windows_gui_check
+          if ($LASTEXITCODE -ne 0) { throw "Проверка интерфейса Windows не пройдена" }
+
       - name: Получить языковые модели OCR
         uses: actions/checkout@v4
         with:
@@ -145,3 +151,8 @@ jobs:
           generate_release_notes: true
           body: |
             Скачайте и запустите `Konvertor.exe` — архив не требуется.
+
+            OCR сканов — экспериментальная поддержка стандартной 11-колоночной ТТН.
+            Распознанные ячейки и итоги нужно сверить с оригиналом и подтвердить;
+            OCR может пропускать строки и ошибаться даже при совпадении арифметики.
+            Если строка пропущена или лишняя, не подтверждайте полноту и не сохраняйте.
