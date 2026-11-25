@@ -1,14 +1,19 @@
-"""Проверка реальных виджетов Windows, включая стили кнопок."""
-from konvektor.gui import KonvertorApp
+"""Проверка настоящих заголовков и цветов виджетов в Windows CI."""
+from konvektor.gui import KonvertorApp, PREVIEW_COLUMNS, NAVY, BG_SOFT
 from tkinter import ttk
 
 app = KonvertorApp()
 try:
     app.update()
     assert app.winfo_exists()
-    assert len(app._button_images) == 3, "Скруглённые кнопки не созданы"
-    assert "Pill.background" in str(ttk.Style(app).layout("Header.TButton"))
-    assert "Pill.background" in str(ttk.Style(app).layout("Header.TMenubutton"))
-    print("Windows Tk GUI: OK")
+    assert app.preview.cget("show") == ("headings",) or app.preview.cget("show") == "headings"
+    for title in PREVIEW_COLUMNS:
+        assert app.preview.heading(title, "text") == title
+    style = ttk.Style(app)
+    assert style.lookup("Grid.Treeview.Heading", "foreground").lower() == NAVY.lower()
+    assert style.lookup("Grid.Treeview.Heading", "background").lower() == BG_SOFT.lower()
+    assert NAVY != BG_SOFT
+    assert "Pill.background" not in str(style.layout("Header.TButton"))
+    print("Windows Tk GUI и заголовки: OK")
 finally:
     app.destroy()

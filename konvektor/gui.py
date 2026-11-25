@@ -142,7 +142,7 @@ _NO_OVERRIDE = object()
 
 #: Оформление окна: спокойный светлый фон, тёмная шапка, один акцент.
 #: Обновлённая палитра 1.9.17 — чуть светлее, мягче контраст, современный вид
-NAVY = "#EAF0F5"
+NAVY = "#1E3A5F"
 NAVY_LIGHT = "#2B4C7A"
 NAVY_HOVER = "#264A7A"
 BG = "#F2F6FC"
@@ -152,9 +152,9 @@ BORDER = "#D4DFEE"
 BORDER_LIGHT = "#E6EDF7"
 TEXT = "#1A2B42"
 MUTED = "#64748B"
-ACCENT = "#E4EBF2"
-ACCENT_HOVER = "#D4E0EA"
-ACCENT_DARK = "#C5D5E2"
+ACCENT = "#2563EB"
+ACCENT_HOVER = "#1D4ED8"
+ACCENT_DARK = "#1E3A8A"
 OK_GREEN = "#059669"
 OK_GREEN_LIGHT = "#ECFDF5"
 ROW_ODD = "#F8FAFC"
@@ -514,15 +514,15 @@ class KonvertorApp(_Base):
             style.configure(
                 "Header.TLabel",
                 background=NAVY,
-                foreground=TEXT,
+                foreground="#FFFFFF",
                 font=("Segoe UI", 16, "bold"),
             )
-            style.configure("HeaderSource.TLabel", background=NAVY, foreground=TEXT,
+            style.configure("HeaderSource.TLabel", background=NAVY, foreground="#FFFFFF",
                             font=("Segoe UI", 16, "bold"))
             style.configure(
                 "HeaderSub.TLabel",
                 background=NAVY,
-                foreground=MUTED,
+                foreground="#BFD0E6",
                 font=("Segoe UI", 9),
             )
             style.configure(
@@ -564,39 +564,13 @@ class KonvertorApp(_Base):
             style.configure("TSeparator", background=BORDER)
             # Все элементы верхней панели в одном цветовом формате.
             for name in ("Header.TMenubutton", "Header.TButton"):
-                style.configure(name, background=ACCENT, foreground=TEXT,
+                style.configure(name, background=ACCENT, foreground="#FFFFFF",
                                 font=("Segoe UI", 9, "bold"), padding=(12, 6),
                                 bordercolor=ACCENT)
                 style.map(name, background=[("pressed", ACCENT_DARK), ("active", ACCENT_HOVER)],
-                          foreground=[("disabled", MUTED)])
-            self._install_rounded_buttons(style)
+                          foreground=[("disabled", "#BFD0E6")])
         except Exception:  # noqa: BLE001 - оформление не должно ломать окно
             pass
-
-    def _install_rounded_buttons(self, style) -> None:
-        """Масштабируемая светлая подложка кнопок, как на панели-образце."""
-        try:
-            images = []
-            for fill in (ACCENT, ACCENT_HOVER, ACCENT_DARK):
-                image = tk.PhotoImage(width=32, height=24)
-                # Прозрачные углы и рамка; середина растягивается ttk.
-                for y in range(24):
-                    inset = 5 if y in (0, 23) else 2 if y in (1, 22) else 1 if y in (2, 21) else 0
-                    image.put(BORDER, to=(inset, y, 32-inset, y+1))
-                    if 2 <= y <= 21:
-                        inner = max(inset + 1, 2)
-                        image.put(fill, to=(inner, y, 32-inner, y+1))
-                images.append(image)
-            self._button_images = images
-            style.element_create("Pill.background", "image", images[0],
-                                 ("pressed", images[2]), ("active", images[1]),
-                                 border=(12, 10, 12, 10), sticky="nsew")
-            style.layout("Header.TButton", [("Pill.background", {"children": [
-                ("Button.padding", {"children": [("Button.label", {"sticky": "nswe"})], "sticky": "nswe"})], "sticky": "nswe"})])
-            style.layout("Header.TMenubutton", [("Pill.background", {"children": [
-                ("Menubutton.padding", {"children": [("Menubutton.label", {"sticky": "nswe"})], "sticky": "nswe"})], "sticky": "nswe"})])
-        except Exception:
-            pass  # стандартные кнопки остаются доступными
 
     def on_update_from_file(self) -> None:
         """Запуск выбранного пользователем установщика, без сетевой загрузки."""
