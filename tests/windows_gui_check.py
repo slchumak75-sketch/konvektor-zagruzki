@@ -6,7 +6,7 @@ app = KonvertorApp()
 try:
     app.update()
     assert app.winfo_exists()
-    assert app.preview.cget("show") == ("headings",) or app.preview.cget("show") == "headings"
+    assert "headings" in tuple(map(str, app.tk.splitlist(app.preview.cget("show"))))
     for title in PREVIEW_COLUMNS:
         assert app.preview.heading(title, "text") == title
     style = ttk.Style(app)
