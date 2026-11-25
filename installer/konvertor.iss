@@ -1,4 +1,4 @@
-#define AppVersion "2.0.2"
+#define AppVersion "2.0.3"
 [Setup]
 AppId={{B9E3E60A-5083-4A4B-A0C0-AC645780AD16}
 AppName=Конвертор загрузки

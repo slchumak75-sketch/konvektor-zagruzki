@@ -1,9 +1,9 @@
 [project]
 name = "konvektor-zagruzki"
-version = "2.0.2"
+version = "2.0.3"
 description = "Конвертор счетов, накладных и прайс-листов в единую Excel-таблицу по образцу"
 requires-python = ">=3.9"
-dependencies = ["xlrd>=2.0.2,<3", "openpyxl>=3.1,<4", "olefile>=0.47,<1", "striprtf>=0.0.26", "pdfplumber>=0.10"]
+dependencies = ["xlrd>=2.0.3,<3", "openpyxl>=3.1,<4", "olefile>=0.47,<1", "striprtf>=0.0.26", "pdfplumber>=0.10"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
