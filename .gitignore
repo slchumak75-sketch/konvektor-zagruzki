@@ -16,7 +16,3 @@ __pycache__/
 Дата не найдена.xlsx
 konvektor_out/
 ~$*.xlsx
-
-# Языковые модели OCR скачиваются сборкой и не хранятся в Git
-tessdata/
-.ocr-tessdata/

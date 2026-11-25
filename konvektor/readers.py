@@ -586,7 +586,7 @@ def _read_pdf(data: bytes) -> List[Sheet]:
                 if any(kw in ln for kw in ("СЧЕТ", "Продавец", "Покупатель", "Итого", "Сумма НДС")):
                     rows.append([ln])
         if not rows:
-            raise ValueError("в PDF не найдено распознаваемых таблиц; если это скан, нужен PDF с текстом или Excel")
+            raise ValueError("в PDF не найдено таблиц")
 
     sheet = Sheet(name="PDF", rows=rows)
     return [sheet]
@@ -645,7 +645,7 @@ def read_source(path: str) -> SourceFile:
     elif kind == "rtf":
         attempts = [("rtf", _read_rtf), ("html", _read_html), ("xlsx", _read_xlsx), ("xls", _read_xls), ("csv", _read_csv)]
     elif kind == "pdf":
-        attempts = [("pdf", _read_pdf)]
+        attempts = [("pdf", _read_pdf), ("html", _read_html), ("csv", _read_csv)]
     else:
         attempts = [("html", _read_html), ("xlsx", _read_xlsx), ("xls", _read_xls), ("csv", _read_csv)]
 

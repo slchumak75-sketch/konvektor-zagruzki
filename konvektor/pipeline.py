@@ -8,10 +8,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-import math
-import copy
-import hashlib
-import sys
 import tempfile
 import traceback
 from collections import OrderedDict
@@ -19,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .analysis import AnalysisReport, build_report, format_report
-from .extract import DocTotal, Item, extract_file
+from .extract import Item, extract_file
 from .meta import DocMeta, extract_meta, fmt_date
 from .readers import read_source
 from .validate import ValidationReport, check_document_totals, validate_items
@@ -73,19 +69,6 @@ class ConvertOptions:
     output_dir: str = ""
     #: писать ли файл сразу (False — только разобрать и показать таблицу)
     write: bool = True
-    #: не сохранять неполный результат, если один из выбранных файлов не прочитан
-    require_all: bool = False
-    #: Исправления исходных ячеек: (файл, лист, строка, блок) -> поля Item.
-    field_edits: Dict[Tuple[str, str, int, int], Dict[str, object]] = field(default_factory=dict)
-    #: Явно подтверждённые страницы одного документа, в порядке страниц.
-    document_groups: List[Tuple[str, ...]] = field(default_factory=list)
-    #: Кэш OCR только на время работы окна. Ключ включает хеш исходного файла.
-    ocr_cache: Optional[dict] = None
-    #: Подтверждение полноты строк OCR привязывается к хешу именно этого файла.
-    ocr_confirmations: Dict[str, str] = field(default_factory=dict)
-    ocr_expected_hashes: Dict[str, str] = field(default_factory=dict)
-    #: Подтверждённые человеком итоги OCR по файлу, странице и строке.
-    ocr_total_edits: Dict[Tuple[str, str, int], Dict[str, float]] = field(default_factory=dict)
     #: склад («Мир», «Кореличи»): подпапка результата <папка>/<склад>/<поставщик>/
     sklad: str = ""
     #: поставщик, выбранный пользователем (пусто — берём из документа)
@@ -100,8 +83,6 @@ class ConvertResult:
     outputs: List[str] = field(default_factory=list)
     items: List[Item] = field(default_factory=list)
     report: Optional[ValidationReport] = None
-    document_totals: List[DocTotal] = field(default_factory=list)
-    ocr_source_hashes: Dict[str, str] = field(default_factory=dict)
     stats: List[FileStat] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -288,63 +269,18 @@ def convert(
         result.notes.append("Не найдено ни одного подходящего файла")
         return result
 
-    prior_sources: Dict[str, Sequence[str]] = {}
-    group_errors: List[str] = []
-    grouped = set()
-    for group in options.document_groups:
-        if len(group) < 2 or len(set(group)) != len(group) or grouped.intersection(group) or any(p not in files for p in group):
-            group_errors.append("Некорректная группа страниц накладной: " + ", ".join(group))
-            continue
-        grouped.update(group)
-        prior_sources[group[-1]] = group[:-1]
-    result.errors.extend(group_errors)
-
     all_items: List[Item] = []
     totals = []
     blocks: Dict[Tuple[str, str, int], List[Item]] = {}
     per_file_items: List[Tuple[str, List[Item]]] = []
     metas: Dict[str, DocMeta] = {}
     analyses: Dict[str, AnalysisReport] = {}
-    edit_counts: Dict[Tuple[str, str, int, int], int] = {}
-    edit_errors: List[str] = []
-    total_edit_counts: Dict[Tuple[str, str, int], int] = {}
-    text_fields = {"name", "barcode", "article", "unit"}
-    number_fields = {"qty", "price", "total_sum", "vat_rate", "vat_sum", "sum_with_vat"}
 
     for path in files:
         log(f"Читаю: {os.path.basename(path)}")
         try:
-            if path in options.ocr_expected_hashes:
-                with open(path, "rb") as source_file:
-                    current_digest = hashlib.file_digest(source_file, "sha256").hexdigest()
-                if current_digest != options.ocr_expected_hashes[path]:
-                    raise ValueError("исходный скан изменился: выберите файлы заново, прежние исправления не применены")
-            try:
-                src = read_source(path)
-                extracted = extract_file(src)
-            except Exception:
-                if not path.lower().endswith(".pdf"):
-                    raise
-                src = None
-                extracted = None
-            if path.lower().endswith(".pdf") and (extracted is None or not extracted.items):
-                from .ocr import read_scanned_pdf
-                with open(path, "rb") as source_file:
-                    digest = hashlib.file_digest(source_file, "sha256").hexdigest()
-                expected = options.ocr_expected_hashes.get(path)
-                if expected is not None and expected != digest:
-                    raise ValueError("исходный скан изменился: выберите файлы заново, прежние исправления не применены")
-                result.ocr_source_hashes[path] = digest
-                cache_key = (path, digest)
-                cached = options.ocr_cache.get(cache_key) if options.ocr_cache is not None else None
-                if cached is None:
-                    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__)))
-                    tessdata = os.environ.get("KONVEKTOR_TESSDATA", os.path.join(base, "tessdata"))
-                    log("  распознаю скан: это может занять несколько минут")
-                    cached = read_scanned_pdf(path, tessdata)
-                    if options.ocr_cache is not None:
-                        options.ocr_cache[cache_key] = copy.deepcopy(cached)
-                src, extracted = copy.deepcopy(cached)
+            src = read_source(path)
+            extracted = extract_file(src)
         except Exception as exc:  # noqa: BLE001 - один битый файл не должен рушить всё
             msg = (
                 f"{os.path.basename(path)}: не удалось прочитать "
@@ -382,46 +318,12 @@ def convert(
         for w in meta.warnings:
             log("  ! " + w)
 
-        # Редактируем исходные значения до подбора, валидации и записи.
-        for item in extracted.items:
-            key = (item.source, item.sheet, item.row, item.block)
-            if key not in options.field_edits:
-                continue
-            edit_counts[key] = edit_counts.get(key, 0) + 1
-            changes = options.field_edits[key]
-            for name, value in changes.items():
-                valid = (name in text_fields and isinstance(value, str) and (name != "name" or bool(value.strip()))) or (
-                    name in number_fields and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value))
-                if not valid:
-                    edit_errors.append(f"Недопустимое исправление {name}: {key}")
-                    continue
-                setattr(item, name, value)
-                item.unrecognized.discard(name)
-                item.needs_confirmation.discard(name)
-
-        for total in extracted.totals:
-            key = (total.source, total.sheet, total.row)
-            if key not in options.ocr_total_edits:
-                continue
-            total_edit_counts[key] = total_edit_counts.get(key, 0) + 1
-            values = options.ocr_total_edits[key]
-            if not total.needs_confirmation or set(values) != {"qty", "sum", "vat_sum", "total"} or any(
-                isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
-                for value in values.values()
-            ):
-                edit_errors.append(f"Недопустимое исправление итога: {key}")
-                continue
-            total.values = dict(values)
-            total.numbers = []
-            total.needs_confirmation = False
-
         matcher = options.matcher
         if matcher is not None:
             # сверка по поставщику документа: begin_file задаёт область поиска
             matcher.begin_file(path, meta.supplier)
             for item in extracted.items:
-                if not ({"name", "barcode"} & (item.unrecognized | item.needs_confirmation)):
-                    matcher.apply(item)
+                matcher.apply(item)
             log(f"  сверка с ведомостью ({getattr(matcher, 'strategy_title', '')}): " + (matcher.summary_text() or "—"))
             for line in matcher.report_lines():
                 log("  " + line)
@@ -448,19 +350,8 @@ def convert(
         per_file_items.append((path, extracted.items))
         result.notes.append(f"{os.path.basename(path)}: листы [{sheet_names}], формат {src.reader}")
         if not extracted.items:
-            note = f"{os.path.basename(path)}: позиции не найдены"
-            result.notes.append(note)
-            if options.require_all:
-                result.errors.append(note)
+            result.notes.append(f"{os.path.basename(path)}: позиции не найдены")
             log("  ! позиции не найдены")
-
-    for key in options.field_edits:
-        if edit_counts.get(key, 0) != 1:
-            edit_errors.append(f"Исправленная строка не найдена или неоднозначна: {key}")
-    for key in options.ocr_total_edits:
-        if total_edit_counts.get(key, 0) != 1:
-            edit_errors.append(f"Исправленный итог не найден или неоднозначен: {key}")
-    result.errors.extend(edit_errors)
 
     if not all_items:
         result.notes.append("Позиции товаров не найдены — проверьте структуру файлов")
@@ -476,10 +367,9 @@ def convert(
             result.notes.append("сверка с ведомостью: " + summary)
 
     report = validate_items(all_items) if options.validate else ValidationReport(items=all_items)
-    check_document_totals(report, totals, blocks, prior_sources=prior_sources)
+    check_document_totals(report, totals, blocks)
     result.report = report
     result.items = all_items
-    result.document_totals = totals
 
     # ---- статистика по файлам -------------------------------------------
     stats: List[FileStat] = []
@@ -530,7 +420,7 @@ def convert(
                     supplier=options.supplier,
                 )
             )
-        else:
+        elif not out_path:
             if options.supplier:
                 combined_supplier = options.supplier
             else:
@@ -570,19 +460,6 @@ def convert(
             f"Готово: позиций {len(all_items)}, ошибок {result.error_count}, "
             f"предупреждений {result.warning_count}, рассчитано {result.computed_count}"
         )
-        return result
-
-    if any(options.ocr_confirmations.get(path) != digest for path, digest in result.ocr_source_hashes.items()):
-        result.errors.append("Полнота строк OCR не подтверждена по оригиналу или исходный файл изменился")
-        log("  файл не записан: полнота OCR не подтверждена")
-        return result
-    unresolved = [item for item in all_items if item.unrecognized or item.needs_confirmation]
-    if unresolved:
-        result.errors.append(f"Не распознаны или не подтверждены значения в {len(unresolved)} строках: проверьте отмеченные ячейки перед сохранением")
-        log("  файл не записан: есть нераспознанные значения")
-        return result
-    if edit_errors or group_errors or (options.require_all and result.errors):
-        log("  файл не записан: не все исходные файлы удалось обработать")
         return result
 
     # ---- запись ----------------------------------------------------------

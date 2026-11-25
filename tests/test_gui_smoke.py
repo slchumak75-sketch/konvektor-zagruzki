@@ -1055,233 +1055,45 @@ def test_barcode_highlight_only_when_document_code_is_in_vedomost(gui):
     assert not app._barcode_highlights
 
 
-def test_select_multiple_files_sorted_convert_and_save(gui, known_paths, tmp_path):
-    from shutil import copyfile
-    from openpyxl import load_workbook
-    app, _, dialogs = gui
-    app.out_var.set(str(tmp_path / "Итоги"))
-    source = known_paths[0]
-    files = [tmp_path / "Страница 10.xls", tmp_path / "Страница 2.xls", tmp_path / "Страница 1.xls"]
-    for path in files:
-        copyfile(source, path)
-    dialogs.open_result = tuple(map(str, files))
-    app.on_add_files()
-    assert any(call[0] == "askopenfilenames" for call in dialogs.calls)
-    assert [os.path.basename(p) for p in app.files] == ["Страница 1.xls", "Страница 2.xls", "Страница 10.xls"]
-    app.on_convert()
-    _run(app)
-    result = app._pending_result
-    assert len(result.stats) == 3
-    assert len(result.items) == sum(s.items for s in result.stats)
-    assert [os.path.basename(s.path) for s in result.stats] == ["Страница 1.xls", "Страница 2.xls", "Страница 10.xls"]
-    app.on_save()
-    _run(app)
-    assert len(app._last_outputs) == 1
-    sheet = load_workbook(app._last_outputs[0])["Данные"]
-    assert sheet.max_row == result.items_count + 2
-
-
-def test_incomplete_multi_file_conversion_cannot_save(gui, known_paths, tmp_path):
-    app, _, dialogs = gui
-    invalid = tmp_path / "сломанный.pdf"
-    invalid.write_bytes(b"%PDF-1.4\nnot a valid document")
-    app._add_files([str(known_paths[0]), str(invalid)])
-    app.on_convert()
-    _run(app)
-    assert app._pending_result.items_count > 0
-    assert app._pending_result.errors
-    assert app.save_btn.cget("state") == "disabled"
-    assert any(call[0] == "showwarning" for call in dialogs.calls)
-    app.on_save()
-    assert not app._last_outputs
-    assert not os.listdir(app.test_documents)
-
-
-def test_file_selection_invalidates_previous_preview(gui, known_paths):
-    app, _, _ = gui
-    app.on_convert()
-    _run(app)
-    assert app.save_btn.cget("state") == "normal"
-    app._add_files([str(known_paths[1]), str(known_paths[2])])
-    assert app._pending_result is None
-    assert app.save_btn.cget("state") == "disabled"
-    assert not app._preview_rows
-
-
-def test_source_cell_edits_recheck_and_survive_save(gui):
-    from openpyxl import load_workbook
-
-    app, module, _ = gui
-    app.on_convert()
-    _run(app)
-    row_id = next(iter(app._preview_rows))
-    first = app._preview_rows[row_id]["item"]
-    row = first.row
-    app.edit_source_cell(row_id, "количество")
-    assert app._editor is not None
-    app._edit_var.set("999,5")
-    app._commit_source_cell(row_id, "количество")
-    _run(app)
-    assert app._pending_result.items[0].qty == 999.5
-    assert any(i.row == row and i.field == "сумма" for i in app._pending_result.report.errors)
-    app.on_save()
-    _run(app)
-    ws = load_workbook(app._last_outputs[0])["Данные"]
-    assert ws.cell(2, 5).value == 999.5
-
-
-def test_source_edits_reset_for_new_file_selection(gui, known_paths):
-    app, _, _ = gui
-    app.on_convert()
-    _run(app)
-    row_id = next(iter(app._preview_rows))
-    app.edit_source_cell(row_id, "Из документа")
-    app._edit_var.set("Исправленное название")
-    app._commit_source_cell(row_id, "Из документа")
-    _run(app)
-    assert app._pending_result.items[0].name == "Исправленное название"
-    app._add_files([str(known_paths[1])])
-    assert app._field_edits == {}
-
-
-def test_arithmetic_highlight_is_removed_after_correction(gui):
-    app, _, _ = gui
-    app.on_convert()
-    _run(app)
-    rid = next(iter(app._preview_rows))
-    original = app._preview_rows[rid]["item"].qty
-    app.edit_source_cell(rid, "количество")
-    app._edit_var.set("9999")
-    app._commit_source_cell(rid, "количество")
-    _run(app)
-    rid = next(iter(app._preview_rows))
-    app._refresh_barcode_highlights()
-    assert app._issue_highlights[(rid, "сумма")].cget("background") == "#FFF1F2"
-    assert app.totals_var.get().startswith("По всем строкам таблицы:")
-    assert app.doc_totals_var.get().startswith("Итоги из документа:")
-    app.edit_source_cell(rid, "количество")
-    app._edit_var.set(str(original))
-    app._commit_source_cell(rid, "количество")
-    _run(app)
-    rid = next(iter(app._preview_rows))
-    app._refresh_barcode_highlights()
-    expected = "#EDFFD9" if app._row_math_ok(app._preview_rows[rid]["item"], app._pending_result.report) else "#FFF1F2"
-    assert app._issue_highlights[(rid, "сумма")].cget("background") == expected
-
-
-def test_pdf_page_grouping_requires_explicit_confirmation(gui, monkeypatch, tmp_path):
-    app, module, _ = gui
-    files = [str(tmp_path / "1.pdf"), str(tmp_path / "2.pdf")]
-    app._add_files(files)
-    calls = []
-    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: calls.append((a, k)) or True)
-    monkeypatch.setattr(app, "_start_convert", lambda *a, **k: None)
-    app.on_convert()
-    assert app._document_groups == [tuple(files)]
-    assert calls[0][1]["default"] == "no"
-    app.on_convert()
-    assert len(calls) == 1
-    app._add_files(files)
-    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: False)
-    app.on_convert()
-    assert app._document_groups == []
-
-
-def test_scanned_rows_must_be_confirmed_and_footer_is_computed(gui, monkeypatch, tmp_path):
-    from konvektor.extract import DocTotal, Item, SheetExtraction
-    from konvektor.readers import Sheet, SourceFile
-    import konvektor.pipeline as pipeline
-    import konvektor.ocr as ocr
-    from openpyxl import load_workbook
-
+def test_update_requires_confirmation_and_launches_selected_exe(gui, monkeypatch, tmp_path):
     app, module, dialogs = gui
-    source = tmp_path / "scan.pdf"
-    source.write_bytes(b"%PDF-test")
-    def fake_scan(path, _data):
-        item = Item(source=path, sheet="PDF 1", row=1, name="Товар", qty=2, price=5,
-                    total_sum=10, vat_rate=20, vat_sum=2, sum_with_vat=12,
-                    needs_confirmation={"name", "qty"})
-        total = DocTotal(source=path, sheet="PDF 1", row=2, label="Итого (OCR)",
-                         values={"qty": 2, "sum": 10, "vat_sum": 2, "total": 12}, needs_confirmation=True)
-        return SourceFile(path, [Sheet("PDF 1")], reader="pdf-ocr"), SheetExtraction(items=[item], totals=[total])
-    monkeypatch.setattr(pipeline, "read_source", lambda _p: (_ for _ in ()).throw(ValueError("scan")))
-    monkeypatch.setattr(ocr, "read_scanned_pdf", fake_scan)
+    installer = tmp_path / "обновление setup.exe"
+    installer.write_bytes(b"test")
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    dialogs.open_result = (str(installer),)
+    calls = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(app, "_on_close", lambda: calls.append("closed"))
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: False)
+    app.on_update_from_file()
+    assert not calls
     monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: True)
-    app._add_files([str(source)])
-    app.on_convert()
-    _run(app)
-    app.on_save()
-    assert not app._last_outputs
-    footer = dict(zip(module.PREVIEW_COLUMNS, app.totals_table.rows[0][1]))
-    assert footer["количество"] == "2 *"
-    assert footer["сумма"] == "10"
-    assert app._pending_result.document_totals[0].needs_confirmation
-    for title, value in (("Из документа", "Товар"), ("количество", "2")):
-        rid = next(iter(app._preview_rows))
-        app.edit_source_cell(rid, title)
-        app._edit_var.set(value)
-        app._commit_source_cell(rid, title)
-        _run(app)
-    assert not app._pending_result.items[0].needs_confirmation
-    app.on_save()
-    _run(app)
-    assert app._last_outputs
-    assert load_workbook(app._last_outputs[0])["Данные"].cell(2, 5).value == 2
+    app.on_update_from_file()
+    assert calls == [([str(installer)], {"shell": False}), "closed"]
 
 
-def test_row_math_colors_all_numeric_cells_and_footer(gui):
-    from konvektor.extract import Item
-    from konvektor.pipeline import ConvertResult
-    from konvektor.validate import validate_items
-    app, module, _ = gui
-    good = Item(source="a", sheet="s", row=1, name="Проверено", qty=2, price=5,
-                total_sum=10, vat_rate=20, vat_sum=2, sum_with_vat=12)
-    bad = Item(source="a", sheet="s", row=2, name="Ошибка", qty=3, price=5,
-               total_sum=14, vat_rate=20, vat_sum=2.8, sum_with_vat=16.8)
-    unknown = Item(source="a", sheet="s", row=3, name="Неизвестно", qty=1, price=5,
-                   total_sum=None, vat_rate=20, vat_sum=1, sum_with_vat=6,
-                   unrecognized={"total_sum"}, needs_confirmation={"total_sum"})
-    report = validate_items([good, bad, unknown])
-    app._pending_result = ConvertResult(items=[good, bad, unknown], report=report)
-    app._show_preview([good, bad, unknown])
-    app._show_totals(app._pending_result)
-    app._refresh_barcode_highlights()
-    ids = list(app._preview_rows)
-    for title in module._NUMERIC_PREVIEW:
-        assert app._issue_highlights[(ids[0], title)].cget("background") == "#EDFFD9"
-        assert app._issue_highlights[(ids[1], title)].cget("background") == "#FFF1F2"
-        assert app._issue_highlights[(ids[2], title)].cget("background") == "#FFF1F2"
-    assert (ids[2], module.COLUMN_FROM_DOC) not in app._issue_highlights
-    assert app._issue_highlights[(ids[2], "сумма")].cget("text") == "??? *"
-    footer = dict(zip(module.PREVIEW_COLUMNS, app.totals_table.rows[0][1]))
-    assert footer["количество"] == "6"
-    assert footer["сумма"] == "??? *"
-    assert footer["сумма НДС"] == "5,80"
-    assert footer["сумма с НДС"] == "34,80"
+def test_update_invalid_file_and_launch_failure_do_not_close(gui, monkeypatch, tmp_path):
+    app, module, dialogs = gui
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    closed = []
+    monkeypatch.setattr(app, "_on_close", lambda: closed.append(True))
+    monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: True)
+    dialogs.open_result = (str(tmp_path / "missing.exe"),)
+    app.on_update_from_file()
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"test")
+    dialogs.open_result = (str(installer),)
+    def fail(*args, **kwargs):
+        raise OSError("ошибка")
+    monkeypatch.setattr(module.subprocess, "Popen", fail)
+    app.on_update_from_file()
+    assert not closed
+    assert sum(name == "showerror" for name, _, _ in dialogs.calls) >= 2
 
 
-def test_math_green_does_not_confirm_ocr_and_detects_wrong_zero_vat(gui):
-    from konvektor.extract import Item
-    from konvektor.validate import validate_items
-    app, _, _ = gui
-    item = Item(source="f", sheet="s", row=1, name="Товар", qty=2, price=5, total_sum=10,
-                vat_rate=20, vat_sum=2, sum_with_vat=12, needs_confirmation={"qty"})
-    report = validate_items([item])
-    assert app._row_math_ok(item, report)
-    assert "qty" in item.needs_confirmation
-    item.vat_rate, item.vat_sum, item.sum_with_vat = 0, 2, 12
-    assert not app._row_math_ok(item, report)
-    item.vat_rate, item.vat_sum, item.sum_with_vat = 20, 2, 12
-    item.computed.add("сумма")
-    assert not app._row_math_ok(item, report)
-
-
-def test_totals_follow_preview_column_widths_and_display_mode(gui):
-    app, module, _ = gui
-    app.preview.column("количество", width=123)
-    app._sync_totals_columns()
-    assert app.totals_table.column("количество", "width") == 123
-    assert app.totals_table.options["displaycolumns"] == module.PREVIEW_WITHOUT_VED
-    app._vedomost = object()
-    app._update_preview_columns()
-    assert app.totals_table.options["displaycolumns"] == module.PREVIEW_COLUMNS
+def test_update_not_started_during_conversion(gui, monkeypatch):
+    app, module, dialogs = gui
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    app._running = True
+    app.on_update_from_file()
+    assert not any(name == "askopenfilename" for name, _, _ in dialogs.calls)

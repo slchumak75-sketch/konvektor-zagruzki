@@ -131,7 +131,7 @@ def _fill(item: Item, mode: str, issues: List[Issue]) -> None:
     rate = item.vat_rate
 
     # 1. сумма без НДС
-    if item.total_sum is None and "total_sum" not in item.unrecognized:
+    if item.total_sum is None:
         if item.qty is not None and item.price is not None:
             item.total_sum = _round2(item.qty * item.price)
             note("сумма", item.total_sum)
@@ -146,7 +146,7 @@ def _fill(item: Item, mode: str, issues: List[Issue]) -> None:
             note("сумма", item.total_sum)
 
     # 2. сумма НДС
-    if item.vat_sum is None and "vat_sum" not in item.unrecognized:
+    if item.vat_sum is None:
         if mode == EXCLUSIVE and item.total_sum is not None and item.sum_with_vat is not None:
             item.vat_sum = _round2(item.sum_with_vat - item.total_sum)
             note("сумма НДС", item.vat_sum)
@@ -160,7 +160,7 @@ def _fill(item: Item, mode: str, issues: List[Issue]) -> None:
             note("сумма НДС", item.vat_sum)
 
     # 3. сумма с НДС
-    if item.sum_with_vat is None and "sum_with_vat" not in item.unrecognized:
+    if item.sum_with_vat is None:
         if mode == INCLUSIVE and item.total_sum is not None:
             item.sum_with_vat = _round2(item.total_sum)
             note("сумма с НДС", item.sum_with_vat)
@@ -182,17 +182,17 @@ def _fill(item: Item, mode: str, issues: List[Issue]) -> None:
             note("сумма с НДС", item.sum_with_vat)
 
     # 4. цена
-    if item.price is None and "price" not in item.unrecognized and item.total_sum is not None and item.qty:
+    if item.price is None and item.total_sum is not None and item.qty:
         item.price = round(item.total_sum / item.qty, 4)
         note("цена", item.price)
 
     # 5. количество
-    if item.qty is None and "qty" not in item.unrecognized and item.price and item.total_sum is not None:
+    if item.qty is None and item.price and item.total_sum is not None:
         item.qty = round(item.total_sum / item.price, 3)
         note("количество", item.qty)
 
     # 6. ставка
-    if item.vat_rate is None and "vat_rate" not in item.unrecognized:
+    if item.vat_rate is None:
         if item.total_sum and item.vat_sum is not None:
             item.vat_rate = round(item.vat_sum / item.total_sum * 100.0, 2)
             note("ставка НДС", item.vat_rate)
@@ -332,27 +332,16 @@ def _check_item(it: Item, mode: str, issues: List[Issue]) -> None:
 
 
 def check_document_totals(
-    report: ValidationReport, totals: Sequence[DocTotal], blocks: Dict[Tuple[str, str, int], List[Item]],
-    prior_sources: Optional[Dict[str, Sequence[str]]] = None,
+    report: ValidationReport, totals: Sequence[DocTotal], blocks: Dict[Tuple[str, str, int], List[Item]]
 ) -> None:
     """Сверить найденные в документах итоговые строки с суммой наших строк."""
     labels = {"qty": "количество", "sum": "сумма", "vat_sum": "сумма НДС", "total": "сумма с НДС"}
     attrs = {"qty": "qty", "sum": "total_sum", "vat_sum": "vat_sum", "total": "sum_with_vat"}
 
-    def aggregate(group: Sequence[Item], kind: str) -> Optional[float]:
-        values = [getattr(i, attrs[kind]) for i in group]
-        if any(value is None for value in values):
-            return None
-        return round(sum(values), 4)
+    def aggregate(group: Sequence[Item], kind: str) -> float:
+        return round(sum(getattr(i, attrs[kind]) or 0.0 for i in group), 4)
 
     for t in totals:
-        if t.needs_confirmation:
-            report.issues.append(Issue(
-                severity="warning", source=t.source, sheet=t.sheet, row=t.row,
-                name=f"«{t.label}»", field="итог",
-                message="итог документа не проверен: распознанные цифры требуют подтверждения по оригиналу",
-            ))
-            continue
         field = total_field_from_label(t.label)
         if field == "skip":
             continue
@@ -361,20 +350,11 @@ def check_document_totals(
             group = list(blocks.get((t.source, t.sheet, t.block), []))
             scope_text = "по листу"
         else:
-            previous = list((prior_sources or {}).get(t.source, ()))
-            present = {src for (src, _sh, _blk), items in blocks.items() if items}
-            if any(src not in present for src in previous):
-                report.issues.append(Issue(
-                    severity="warning", source=t.source, sheet=t.sheet, row=t.row,
-                    name=f"«{t.label}»", field="итог",
-                    message="итог документа не проверен: не все выбранные страницы прочитаны",
-                ))
-                continue
             group = []
             for (src, sh, blk), items in blocks.items():
-                if src in previous or (src == t.source and sh == t.sheet and blk <= t.block):
+                if src == t.source and sh == t.sheet and blk <= t.block:
                     group.extend(items)
-            scope_text = "по выбранным страницам" if previous else "накопительно"
+            scope_text = "накопительно"
         if not group:
             continue
 
@@ -393,22 +373,12 @@ def check_document_totals(
                 # не знаем, что за итог — проверяем, сходится ли он хоть с чем-то
                 nums = [n for n in t.numbers if n]
                 ok = False
-                incomplete = False
                 for kind in attrs:
                     calc = aggregate(group, kind)
-                    if calc is None:
-                        incomplete = True
-                        continue
                     if any(abs(calc - n) <= max(0.05, abs(n) * 0.001) for n in nums):
                         ok = True
                         break
-                if not ok and incomplete:
-                    report.issues.append(Issue(
-                        severity="warning", source=t.source, sheet=t.sheet, row=t.row,
-                        name=f"«{t.label}» ({scope_text})", field="итог",
-                        message="итог документа не проверен: есть пустые значения в строках, а поле итога не определено",
-                    ))
-                elif not ok:
+                if not ok:
                     report.issues.append(
                         Issue(
                             severity="warning",
@@ -429,14 +399,6 @@ def check_document_totals(
 
         for kind, doc_val in pairs:
             calc = aggregate(group, kind)
-            if calc is None:
-                report.issues.append(Issue(
-                    severity="warning", source=t.source, sheet=t.sheet, row=t.row,
-                    name=f"«{t.label}» ({scope_text})", field=labels[kind],
-                    message=f"итог документа ({labels[kind]}) не проверен: в строках есть пустые значения",
-                    doc_value=doc_val,
-                ))
-                continue
             tol = QTY_TOL if kind == "qty" else max(0.05, abs(doc_val) * 0.001)
             if abs(calc - doc_val) > tol:
                 report.issues.append(

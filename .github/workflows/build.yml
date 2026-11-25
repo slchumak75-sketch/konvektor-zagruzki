@@ -61,81 +61,62 @@ jobs:
       - name: Установить зависимости
         run: pip install -r requirements-dev.txt
 
-      - name: Проверить реальные виджеты Windows
-        shell: pwsh
-        run: |
-          python -m tests.windows_gui_check
-          if ($LASTEXITCODE -ne 0) { throw "Проверка интерфейса Windows не пройдена" }
-
-      - name: Получить языковые модели OCR
-        uses: actions/checkout@v4
-        with:
-          repository: tesseract-ocr/tessdata_fast
-          ref: 87416418657359cb625c412a48b6e1d6d41c29bd
-          path: .ocr-tessdata
-          sparse-checkout: |
-            eng.traineddata
-            rus.traineddata
-          sparse-checkout-cone-mode: false
-
-      - name: Проверить контрольные суммы моделей
-        shell: pwsh
-        run: |
-          if ((Get-FileHash .ocr-tessdata/eng.traineddata -Algorithm SHA256).Hash -ne "7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2") { throw "eng.traineddata: неверная контрольная сумма" }
-          if ((Get-FileHash .ocr-tessdata/rus.traineddata -Algorithm SHA256).Hash -ne "E16E5E036CCE1D9EC2B00063CF8B54472625B9E14D893A169E2B0DEDEB4DF225") { throw "rus.traineddata: неверная контрольная сумма" }
+      - name: Проверить настоящие виджеты Windows
+        run: python -m tests.windows_gui_check
 
       - name: Собрать оконную версию (Konvertor.exe)
         shell: pwsh
-        run: |
-          $site = python -c "import pathlib, tesserocr; print(pathlib.Path(tesserocr.__file__).resolve().parent.parent)"
-          pyinstaller --noconfirm --onefile --noconsole --noupx `
-            --name Konvertor --icon assets/konvektor.ico `
-            --add-data "assets/konvektor_icon.png;assets" `
-            --add-data ".ocr-tessdata/eng.traineddata;tessdata" `
-            --add-data ".ocr-tessdata/rus.traineddata;tessdata" `
-            --add-data "licenses;licenses" `
-            --add-binary "$site/tesserocr.libs/*.dll;tesserocr.libs" `
-            app_gui.py 2>&1 | Tee-Object -FilePath ocr-build.log
-          $buildExit = $LASTEXITCODE
-          if ($buildExit -ne 0) {
-            $message = ((Get-Content ocr-build.log -Tail 30) -join "%0A")
-            Write-Output "::error::Konvertor.exe ($buildExit): $message"
-            throw "Сборка Konvertor.exe не удалась"
-          }
+        run: >
+          pyinstaller --noconfirm --onefile --noconsole --noupx
+          --name Konvertor
+          --icon assets/konvektor.ico
+          --add-data "assets/konvektor_icon.png;assets"
+          app_gui.py
 
       - name: Собрать консольную версию (Konvertor-cli.exe)
         shell: pwsh
-        run: |
-          $site = python -c "import pathlib, tesserocr; print(pathlib.Path(tesserocr.__file__).resolve().parent.parent)"
-          pyinstaller --noconfirm --onefile --console --noupx `
-            --name Konvertor-cli --icon assets/konvektor.ico `
-            --add-data ".ocr-tessdata/eng.traineddata;tessdata" `
-            --add-data ".ocr-tessdata/rus.traineddata;tessdata" `
-            --add-data "licenses;licenses" `
-            --add-binary "$site/tesserocr.libs/*.dll;tesserocr.libs" `
-            app_cli.py 2>&1 | Tee-Object -FilePath ocr-build-cli.log
-          $buildExit = $LASTEXITCODE
-          if ($buildExit -ne 0) {
-            $message = ((Get-Content ocr-build-cli.log -Tail 30) -join "%0A")
-            Write-Output "::error::Konvertor-cli.exe ($buildExit): $message"
-            throw "Сборка Konvertor-cli.exe не удалась"
-          }
+        run: >
+          pyinstaller --noconfirm --onefile --console --noupx
+          --name Konvertor-cli
+          --icon assets/konvektor.ico
+          app_cli.py
 
       - name: Проверить собранные .exe
         shell: pwsh
         run: |
           .\dist\Konvertor-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Konvertor-cli.exe --version: код $LASTEXITCODE" }
-          .\dist\Konvertor-cli.exe --ocr-selftest
-          if ($LASTEXITCODE -ne 0) { throw "Konvertor-cli.exe --ocr-selftest: код $LASTEXITCODE" }
           if (-not (Test-Path .\dist\Konvertor.exe)) { throw "Konvertor.exe не собран" }
           Get-Item .\dist\Konvertor.exe, .\dist\Konvertor-cli.exe | Format-Table Name, Length
+
+      - name: Собрать установщик
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\konvertor.iss
+          if ($LASTEXITCODE -ne 0) { throw "Ошибка сборки setup: $LASTEXITCODE" }
+          if (-not (Test-Path .\dist\Konvertor-Setup.exe)) { throw "Setup не собран" }
+
+      - name: Проверить установку и повторную установку
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "KonvertorInstallTest"
+          $settings = Join-Path $env:APPDATA "Konvertor"
+          New-Item -ItemType Directory -Force $settings | Out-Null
+          $sentinel = Join-Path $settings "installer-test.txt"
+          Set-Content $sentinel "keep"
+          foreach ($i in 1..2) {
+            $proc = Start-Process -FilePath (Resolve-Path .\dist\Konvertor-Setup.exe) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir") -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "Ошибка установки: $($proc.ExitCode)" }
+            if (-not (Test-Path "$dir\Konvertor.exe")) { throw "Программа не установлена" }
+            if ((Get-Content $sentinel) -ne "keep") { throw "Данные настроек повреждены" }
+          }
 
       - name: Сохранить готовые файлы
         uses: actions/upload-artifact@v4
         with:
           name: Konvertor-windows
           path: |
+            dist/Konvertor-Setup.exe
             dist/Konvertor.exe
             dist/Konvertor-cli.exe
           retention-days: 90
@@ -147,13 +128,7 @@ jobs:
           # Пробные сборки не заменяют последний стабильный релиз.
           prerelease: ${{ contains(github.ref_name, 'rc') }}
           make_latest: ${{ contains(github.ref_name, 'rc') && 'false' || 'legacy' }}
-          files: dist/Konvertor.exe
+          files: dist/Konvertor-Setup.exe
           generate_release_notes: true
           body: |
-            Скачайте и запустите `Konvertor.exe` — архив не требуется.
-
-            OCR сканов — экспериментальная поддержка стандартной 11-колоночной ТТН.
-            Распознанные ячейки нужно сверить с оригиналом и подтвердить;
-            рассчитанные итоги под столбцами сравнивайте с оригиналом вручную.
-            OCR может пропускать строки и ошибаться даже при совпадении арифметики.
-            Если строка пропущена или лишняя, не подтверждайте полноту и не сохраняйте.
+            Скачайте и запустите `Konvertor-Setup.exe` — архив не требуется.

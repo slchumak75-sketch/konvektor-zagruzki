@@ -325,11 +325,9 @@ class Treeview(Widget):
     def heading(self, column, **k):
         self.headings[column] = k.get("text", "")
 
-    def column(self, column, option=None, **k):
+    def column(self, column, **k):
         if "width" in k:
             self.widths[column] = k["width"]
-        if option == "width":
-            return self.widths.get(column, 0)
 
     def insert(self, parent, index, values=None, **k):
         self._next_id += 1
